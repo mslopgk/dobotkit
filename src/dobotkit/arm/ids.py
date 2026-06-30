@@ -12,8 +12,13 @@ Reconstruction sources (per the design spec / implementation plan):
    (device 0-9, pose 10-19, alarm 20-29, home 30-39, HHT 40-49,
    arm-orientation 50-59, end-effector 60-69, JOG 70-79, PTP 80-89,
    CP 90-99, ARC 100-109, WAIT/TRIG 110-129, IO 130-139, EMotor 135-136,
-   sensors 137-139 / 211-214, WiFi 150-159, lost-step 170-172,
-   speed-ratio 173-176, queue control 240-249).
+   legacy color/IR sensors 137-139 / angle-sensor 211-214,
+   Seeed grove sensors 215-219 (distinct, unverified block),
+   WiFi 150-159, lost-step 170-177, speed-ratio 173-176,
+   queue control 240-249, firmware upgrade 250-259).
+
+Protocol-id constraint: the wire frame stores the command id in a single byte,
+so every ``ProtocolId`` value must lie in ``range(0, 256)``.
 
 Values interpolated from the categorical numbering rule (i.e. not present in
 the verified pydobot seed) are tagged with a trailing ``# unverified``
@@ -39,12 +44,16 @@ class ProtocolId(IntEnum):
     GET_DEVICE_ID = 3  # unverified
     GET_DEVICE_TIME = 4  # unverified
     GET_DEVICE_INFO = 5  # unverified
+    SET_GET_DEVICE_WITH_L = 6  # unverified (DeviceWithL toggle; std Dobot id 3 is taken by GET_DEVICE_ID)
+    RESTART_MAGIC_BOX = 7  # unverified
+    GET_UART4_PERIPHERALS_TYPE = 8  # unverified
 
     # --- Real-time pose / kinematics (10-19) ---
     GET_POSE = 10
     RESET_POSE = 11
     GET_KINEMATICS = 12  # unverified
     GET_POSE_L = 13  # unverified
+    GET_USER_PARAMS = 14  # unverified (was colliding with GET_POSE_L=13)
 
     # --- Alarm (20-29) ---
     GET_ALARMS_STATE = 20
@@ -97,6 +106,7 @@ class ProtocolId(IntEnum):
     SET_CP2_CMD = 92  # unverified
     SET_GET_CP_COMMON_PARAMS = 93  # unverified
     SET_CP_LE_CMD = 94  # unverified
+    SET_GET_CPR_HOLD_ENABLE = 95  # unverified
 
     # --- ARC / Circle (100-109) ---
     SET_GET_ARC_PARAMS = 100
@@ -131,7 +141,7 @@ class ProtocolId(IntEnum):
     SET_GET_WIFI_DNS = 156  # unverified
     GET_WIFI_CONNECT_STATUS = 157  # unverified
 
-    # --- Lost-step / motor mode / speed ratio (170-176) ---
+    # --- Lost-step / motor mode / speed ratio (170-177) ---
     SET_GET_LOST_STEP_PARAMS = 170  # unverified
     SET_LOST_STEP_CMD = 171  # unverified
     SET_GET_MOTOR_MODE = 172  # unverified
@@ -139,6 +149,7 @@ class ProtocolId(IntEnum):
     SET_GET_L_SPEED_RATIO = 174  # unverified
     SET_GET_BASE_DECODER = 175  # unverified
     SET_GET_LR_HANDED_CONFIG = 176  # unverified
+    SET_GET_LOST_STEP_ENABLE_AND_PARAMS = 177  # unverified (combined enable+params; distinct from 170/171)
 
     # --- Angle sensor / Seeed (211-214) ---
     SET_GET_ANGLE_SENSOR_STATIC_ERROR = 211  # unverified
@@ -146,10 +157,27 @@ class ProtocolId(IntEnum):
     SET_GET_BASE_DECODER_STATIC_ERROR = 213  # unverified
     SET_GET_LR_HANDED_CALIB = 214  # unverified
 
+    # --- Seeed grove sensors (215-219) ---
+    # Distinct ids for the Seeed grove sensor commands. The golden SDK builds
+    # each from inline scalar args (no dedicated id seed), so these are a
+    # contiguous unverified block kept separate from the legacy color/IR
+    # sensors (137/138). Placed just past the angle-sensor block (211-214) and
+    # within the single-byte id range the wire frame requires (0-255).
+    SET_GET_SEEED_DISTANCE = 215  # unverified
+    SET_GET_SEEED_COLOR = 216  # unverified
+    SET_GET_SEEED_TEMP = 217  # unverified
+    SET_GET_SEEED_LIGHT = 218  # unverified
+    SET_SEEED_RGB = 219  # unverified
+
     # --- Queue control (240-249) ---
     SET_QUEUED_CMD_START_EXEC = 240
     SET_QUEUED_CMD_STOP_EXEC = 241
     SET_QUEUED_CMD_FORCE_STOP_EXEC = 242
+    SET_QUEUED_CMD_START_DOWNLOAD = 243  # unverified (offline download enter; between 242 and 245)
+    SET_QUEUED_CMD_STOP_DOWNLOAD = 244  # unverified (offline download leave)
     SET_QUEUED_CMD_CLEAR = 245
     GET_QUEUED_CMD_CURRENT_INDEX = 246
     GET_QUEUED_CMD_MOTION_FINISH = 247
+
+    # --- Firmware upgrade (250-259) ---
+    SET_GET_UPGRADE_FW_READY = 250  # unverified (firmware-upgrade-ready handshake)
