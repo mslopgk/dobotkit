@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dobotkit"
+dynamic = ["version"]
+description = "Complete pure-Python control library for Dobot Magician Lite (arm) and Magician GO (car)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "dobotkit contributors" }]
+dependencies = ["pyserial>=3.5", "websockets>=11.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov", "ruff", "mypy"]
+
+[tool.hatch.version]
+path = "src/dobotkit/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dobotkit"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.mypy]
+# Runtime support stays >=3.9 (see requires-python); this is the lowest version
+# the installed mypy can type-check against. 3.9-vs-3.10 makes no difference to
+# this codebase's annotations.
+python_version = "3.10"
+packages = ["dobotkit"]
+strict = true
+
+# pyserial ships no type stubs (and types-pyserial may be unavailable offline);
+# ignore its missing imports rather than weakening the strict gate elsewhere.
+[[tool.mypy.overrides]]
+module = ["serial", "serial.*"]
+ignore_missing_imports = true
