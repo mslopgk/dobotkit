@@ -38,12 +38,14 @@ module importable headless (CI / no-display test runners).
 """
 from __future__ import annotations
 
+import queue
 import tkinter as tk
 from functools import partial
 from tkinter import messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional
 
 from dobotkit.enums import PTPMode
+from dobotkit.gui._async import run_in_thread
 from dobotkit.gui.arm_controller import ActionResult, ArmController
 from dobotkit.gui.widgets import JogButton, SectionFrame, ValueGrid
 
@@ -92,6 +94,13 @@ class ArmPanel(ttk.Frame):
         # Widgets that must be disabled while disconnected; populated as the
         # sections are built. Every entry is a widget whose "state" we toggle.
         self._motion_widgets: List[tk.Widget] = []
+        # True while a blocking move runs on a worker thread (prevents overlap).
+        self._motion_busy: bool = False
+        # Worker threads push their completion callbacks here; a main-thread
+        # ``after`` loop (see _pump_ui_queue) drains and runs them, so widgets
+        # are only ever touched on the Tk thread. ``Queue.put`` is thread-safe;
+        # ``Tk.after`` is NOT callable from a worker thread, hence the queue.
+        self._ui_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
 
         # Tk variables (created against this frame, so no global root is needed).
         self._port_var = tk.StringVar(master=self)
@@ -141,6 +150,33 @@ class ArmPanel(ttk.Frame):
         # Reflect the controller's starting state (typically disconnected).
         self._populate_ports()
         self._set_connected_state(self.controller.is_connected)
+
+        # Start the main-thread pump that delivers worker-thread results.
+        self._pump_ui_queue()
+
+    # ------------------------------------------------------------------ #
+    # worker-result pump (main thread)
+    # ------------------------------------------------------------------ #
+    def _pump_ui_queue(self) -> None:
+        """Drain callbacks queued by worker threads, on the Tk main thread.
+
+        Reschedules itself via ``after`` so results from off-thread actions are
+        applied where it is safe to touch widgets. Stops silently once the widget
+        is destroyed.
+        """
+        try:
+            while True:
+                callback = self._ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception as exc:  # a bad callback must not kill the pump
+                    self._log(f"UI callback error: {exc}")
+        except queue.Empty:
+            pass
+        try:
+            self.after(60, self._pump_ui_queue)
+        except tk.TclError:
+            pass  # widget destroyed; stop pumping
 
     # ------------------------------------------------------------------ #
     # section builders
@@ -311,25 +347,32 @@ class ArmPanel(ttk.Frame):
         sec = SectionFrame(self, "End effector")
         sec.grid(row=grid_row, column=0, sticky="ew", padx=6, pady=4)
 
-        def _pair(row: int, label: str, on_cmd: Callable[[], Any],
-                  off_label: str, off_cmd: Callable[[], Any],
-                  on_label: str) -> None:
+        def _row(row: int, label: str,
+                 buttons: "list[tuple[str, Callable[[], Any]]]") -> None:
             ttk.Label(sec, text=label, width=10).grid(
                 row=row, column=0, sticky="w", padx=6
             )
-            b_on = ttk.Button(sec, text=on_label, command=on_cmd)
-            b_on.grid(row=row, column=1, padx=2, pady=1)
-            b_off = ttk.Button(sec, text=off_label, command=off_cmd)
-            b_off.grid(row=row, column=2, padx=2, pady=1)
-            self._motion_widgets.append(b_on)
-            self._motion_widgets.append(b_off)
+            for col, (text, cmd) in enumerate(buttons, start=1):
+                b = ttk.Button(sec, text=text, command=cmd, width=9)
+                b.grid(row=row, column=col, padx=2, pady=1)
+                self._motion_widgets.append(b)
 
-        _pair(0, "Suction", lambda: self._on_suck(True),
-              "Off", lambda: self._on_suck(False), "On")
-        _pair(1, "Gripper", lambda: self._on_grip(True),
-              "Open", lambda: self._on_grip(False), "Close")
-        _pair(2, "Laser", lambda: self._on_laser(True),
-              "Off", lambda: self._on_laser(False), "On")
+        # Suction / gripper expose three states, incl. cutting the air pump
+        # entirely (enable=False), not just toggling the vacuum/grip.
+        _row(0, "Suction", [
+            ("Suck", lambda: self._on_suck(True)),
+            ("Release", lambda: self._on_suck(False)),
+            ("Pump off", lambda: self._on_suck(False, enable=False)),
+        ])
+        _row(1, "Gripper", [
+            ("Close", lambda: self._on_grip(True)),
+            ("Open", lambda: self._on_grip(False)),
+            ("Pump off", lambda: self._on_grip(False, enable=False)),
+        ])
+        _row(2, "Laser", [
+            ("On", lambda: self._on_laser(True)),
+            ("Off", lambda: self._on_laser(False)),
+        ])
 
         # Servo id + angle setter.
         servo = ttk.Frame(sec)
@@ -522,15 +565,42 @@ class ArmPanel(ttk.Frame):
     # ------------------------------------------------------------------ #
     # motion callbacks
     # ------------------------------------------------------------------ #
+    def _dispatch_motion(self, call: str, fn: Callable[[], ActionResult]) -> None:
+        """Run a blocking move OFF the Tk thread so the GUI never freezes.
+
+        A queued move waited on with ``wait=True`` polls the command queue for up
+        to its timeout; running that in the button callback would freeze the whole
+        window. We run it on a worker thread and report the result back on the UI
+        thread via ``self.after``. A single move runs at a time (``_motion_busy``).
+        """
+        if self._motion_busy:
+            self._log(f"{call} -> [BUSY] a motion is already in progress")
+            return
+        self._motion_busy = True
+        self._log(f"{call} ... (running)")
+
+        def done(result: Any, error: Optional[BaseException]) -> None:
+            self._motion_busy = False
+            if error is not None:
+                self._log(f"{call} -> [ERROR] {type(error).__name__}: {error}")
+            elif isinstance(result, ActionResult):
+                self._report(call, result)
+            else:
+                self._log(f"{call} -> done")
+
+        # Schedule via the thread-safe queue (NOT self.after, which a worker
+        # thread cannot call); the main-thread pump runs ``done`` safely.
+        run_in_thread(fn, done, self._ui_queue.put)
+
     def _on_move_to(self) -> None:
         coords = self._read_floats(self._abs_vars, ("x", "y", "z", "r"))
         if coords is None:
             return
         mode = PTPMode[self._ptp_mode_var.get()]
         x, y, z, r = coords
-        self._report(
+        self._dispatch_motion(
             f"move_to({x}, {y}, {z}, {r}, mode={mode.name})",
-            self.controller.move_to(x, y, z, r, mode=mode, wait=True),
+            lambda: self.controller.move_to(x, y, z, r, mode=mode, wait=True),
         )
 
     def _on_move_relative(self) -> None:
@@ -538,9 +608,9 @@ class ArmPanel(ttk.Frame):
         if offs is None:
             return
         dx, dy, dz, dr = offs
-        self._report(
+        self._dispatch_motion(
             f"move_relative({dx}, {dy}, {dz}, {dr})",
-            self.controller.move_relative(dx, dy, dz, dr, wait=True),
+            lambda: self.controller.move_relative(dx, dy, dz, dr, wait=True),
         )
 
     def _on_set_speed(self) -> None:
@@ -557,7 +627,7 @@ class ArmPanel(ttk.Frame):
         ):
             self._log("home() cancelled by user")
             return
-        self._report("home()", self.controller.home(wait=True))
+        self._dispatch_motion("home()", lambda: self.controller.home(wait=True))
 
     # ------------------------------------------------------------------ #
     # jog callbacks
@@ -575,11 +645,15 @@ class ArmPanel(ttk.Frame):
     # ------------------------------------------------------------------ #
     # end-effector callbacks
     # ------------------------------------------------------------------ #
-    def _on_suck(self, on: bool) -> None:
-        self._report(f"suck({on})", self.controller.suck(on))
+    def _on_suck(self, on: bool, *, enable: bool = True) -> None:
+        self._report(
+            f"suck(on={on}, enable={enable})", self.controller.suck(on, enable=enable)
+        )
 
-    def _on_grip(self, on: bool) -> None:
-        self._report(f"grip({on})", self.controller.grip(on))
+    def _on_grip(self, on: bool, *, enable: bool = True) -> None:
+        self._report(
+            f"grip(on={on}, enable={enable})", self.controller.grip(on, enable=enable)
+        )
 
     def _on_laser(self, on: bool) -> None:
         self._report(f"laser({on})", self.controller.laser(on))

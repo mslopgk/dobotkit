@@ -34,12 +34,14 @@ mypy relaxation); the logic it drives lives fully-typed in
 """
 from __future__ import annotations
 
+import queue
 import tkinter as tk
 from functools import partial
 from tkinter import ttk
 from typing import Any, Callable, Dict, Optional
 
 from dobotkit.enums import LEDChannel
+from dobotkit.gui._async import run_in_thread
 from dobotkit.gui.go_controller import GoController
 from dobotkit.gui.widgets import JogButton, SectionFrame, ValueGrid
 
@@ -130,8 +132,57 @@ class GoPanel(ttk.Frame):
 
         self._telemetry: Optional[ValueGrid] = None
 
+        # Off-thread dispatch for blocking navigation (WaypointNav / PreciseMover
+        # loop with timeouts and would otherwise freeze the UI). Worker threads
+        # push completion callbacks onto this queue; a main-thread ``after`` pump
+        # drains it. ``_nav_busy`` prevents overlapping navigation runs.
+        self._ui_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
+        self._nav_busy: bool = False
+
         self._build()
         self._set_connected_state(self.controller.is_connected)
+        self._pump_ui_queue()
+
+    # ------------------------------------------------------------------ #
+    # worker-result pump (main thread)
+    # ------------------------------------------------------------------ #
+    def _pump_ui_queue(self) -> None:
+        """Drain worker-thread callbacks on the Tk main thread; self-reschedules."""
+        try:
+            while True:
+                callback = self._ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception as exc:  # noqa: BLE001 -- never kill the pump
+                    self._emit(f"UI callback error: {exc}")
+        except queue.Empty:
+            pass
+        try:
+            self.after(60, self._pump_ui_queue)
+        except tk.TclError:
+            pass  # widget destroyed; stop pumping
+
+    def _run_async(self, label: str, action: Callable[[], Any]) -> None:
+        """Run a BLOCKING controller call off the Tk thread, then log the result.
+
+        Used for navigation (``nav_goto`` / ``precise_forward``) which polls with
+        timeouts; running it inline would freeze the window. Only one navigation
+        runs at a time (``_nav_busy``).
+        """
+        if self._nav_busy:
+            self._emit(f"{label} -> [BUSY] navigation already running")
+            return
+        self._nav_busy = True
+        self._emit(f"{label} ... (running)")
+
+        def done(result: Any, error: Optional[BaseException]) -> None:
+            self._nav_busy = False
+            if error is not None:
+                self._emit(f"{label} -> EXCEPTION: {error}")
+            else:
+                self._emit(f"{label} -> {result!r}")
+
+        run_in_thread(action, done, self._ui_queue.put)
 
     # ------------------------------------------------------------------ #
     # Logging helpers
@@ -529,7 +580,7 @@ class GoPanel(ttk.Frame):
     def _on_nav_goto(self) -> None:
         x = self._num(self._nav_goto_x, "goto x")
         y = self._num(self._nav_goto_y, "goto y")
-        self._run(
+        self._run_async(
             f"nav_goto(x={x}, y={y})",
             lambda: self.controller.nav_goto(x, y),
         )
@@ -537,7 +588,7 @@ class GoPanel(ttk.Frame):
     def _on_precise_forward(self) -> None:
         mm = self._num(self._pf_mm, "precise mm", 100.0)
         speed = self._num(self._pf_speed, "precise speed", 25.0)
-        self._run(
+        self._run_async(
             f"precise_forward(mm={mm}, speed={speed})",
             lambda: self.controller.precise_forward(mm, speed=speed),
         )

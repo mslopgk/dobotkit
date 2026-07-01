@@ -55,16 +55,23 @@ class _FakeEffector:
         self.laser_on: bool = False
         self.servos: Dict[int, float] = {}
 
-    def suck(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        self.suction = bool(on)
+    def suck(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        # Pump off (enable=False) forces the vacuum state off too.
+        self.suction = bool(on) and bool(enable)
         return None
 
-    def grip(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        self.gripper = bool(on)
+    def grip(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        self.gripper = bool(on) and bool(enable)
         return None
 
-    def laser(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        self.laser_on = bool(on)
+    def laser(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        self.laser_on = bool(on) and bool(enable)
         return None
 
     def set_servo(

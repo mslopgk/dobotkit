@@ -42,6 +42,27 @@ def test_effector_suck_off_keeps_control_enabled():
     )
 
 
+def test_effector_suck_pump_off_disables_control():
+    # enable=False cuts the air pump entirely (enable_ctrl=False).
+    ll = MagicMock()
+    eff = EffectorGroup(ll)
+
+    eff.suck(False, enable=False)
+    ll.set_end_effector_suction_cup.assert_called_once_with(
+        enable_ctrl=False, on=False, queued=True
+    )
+
+
+def test_effector_grip_pump_off_disables_control():
+    ll = MagicMock()
+    eff = EffectorGroup(ll)
+
+    eff.grip(False, enable=False)
+    ll.set_end_effector_gripper.assert_called_once_with(
+        enable_ctrl=False, on=False, queued=True
+    )
+
+
 def test_effector_suck_honours_queued_flag():
     ll = MagicMock()
     eff = EffectorGroup(ll)

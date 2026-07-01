@@ -9,13 +9,12 @@ method and passes its return value straight through.
 
 Design choices baked into these facades:
 
-* **Effector on/off pairs** (suction cup, gripper, laser) always set
-  ``enable_ctrl=True`` — the control circuit stays enabled while ``on`` toggles
-  the actuator. Releasing with ``enable_ctrl=False`` would cut control power and
-  let the tool drift, so the ergonomic ``suck`` / ``grip`` / ``laser`` helpers
-  expose only the ``on`` flag and keep control enabled. They default to
-  ``queued=True`` so they sequence correctly inside a motion program (pick →
-  move → place).
+* **Effector on/off pairs** (suction cup, gripper, laser) default to
+  ``enable_ctrl=True`` — the control circuit / air pump stays powered while
+  ``on`` toggles the actuator (grab vs release). Pass ``enable=False`` to cut
+  the pump/control power entirely (e.g. ``suck(False, enable=False)`` stops the
+  air pump). They default to ``queued=True`` so they sequence correctly inside a
+  motion program (pick → move → place).
 * **IO / sensor scalar helpers** unwrap the low-level ``NamedTuple`` readings to
   the single value the caller actually wants (``get_di`` → ``int`` level,
   ``get_adc`` → ``int`` value), while readers that return rich tuples (color,
@@ -45,25 +44,40 @@ class _Group:
 class EffectorGroup(_Group):
     """Ergonomic accessors for the arm's end effectors."""
 
-    def suck(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        """Turn the suction cup on (grab) or off (release).
+    def suck(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        """Drive the suction cup.
 
-        Control stays enabled either way; ``on`` is the vacuum state.
+        ``on`` is the vacuum state (``True`` = grab, ``False`` = release/blow).
+        ``enable`` is the control-circuit / air-pump power: it defaults to
+        ``True`` (pump powered), but pass ``enable=False`` to cut the pump
+        entirely (fully off). To grab: ``suck(True)``; to release: ``suck(False)``;
+        to stop the pump: ``suck(False, enable=False)``.
         """
         return self.lowlevel.set_end_effector_suction_cup(
-            enable_ctrl=True, on=bool(on), queued=queued
+            enable_ctrl=bool(enable), on=bool(on), queued=queued
         )
 
-    def grip(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        """Close the gripper (``on=True``) or open it (``on=False``)."""
+    def grip(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        """Drive the gripper.
+
+        ``on`` toggles the actuator (``True`` = close, ``False`` = open).
+        ``enable`` is the air-pump / control power (default ``True``); pass
+        ``enable=False`` to switch the pump off entirely.
+        """
         return self.lowlevel.set_end_effector_gripper(
-            enable_ctrl=True, on=bool(on), queued=queued
+            enable_ctrl=bool(enable), on=bool(on), queued=queued
         )
 
-    def laser(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        """Switch the laser on or off (control stays enabled)."""
+    def laser(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        """Switch the laser on or off (``enable`` powers the control circuit)."""
         return self.lowlevel.set_end_effector_laser(
-            enable_ctrl=True, on=bool(on), queued=queued
+            enable_ctrl=bool(enable), on=bool(on), queued=queued
         )
 
     def set_type(self, end_type: int, *, queued: bool = False) -> Optional[int]:

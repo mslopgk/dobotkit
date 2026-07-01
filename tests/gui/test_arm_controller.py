@@ -272,6 +272,32 @@ def test_laser_delegates_to_effector(fake_arm: FakeArm) -> None:
     assert args == (True,)
 
 
+def test_suck_pump_off_passes_enable_false(fake_arm: FakeArm) -> None:
+    ctrl = ArmController(device=fake_arm)
+    result = ctrl.suck(False, enable=False)
+    assert result.ok is True
+    assert "pump off" in result.message.lower()
+    _name, args, kwargs = _find(fake_arm.calls, "effector.suck")
+    assert args == (False,)
+    assert kwargs.get("enable") is False
+
+
+def test_grip_pump_off_passes_enable_false(fake_arm: FakeArm) -> None:
+    ctrl = ArmController(device=fake_arm)
+    result = ctrl.grip(False, enable=False)
+    assert result.ok is True
+    assert "pump off" in result.message.lower()
+    _name, args, kwargs = _find(fake_arm.calls, "effector.grip")
+    assert kwargs.get("enable") is False
+
+
+def test_suck_default_enables_pump(fake_arm: FakeArm) -> None:
+    ctrl = ArmController(device=fake_arm)
+    ctrl.suck(True)
+    _name, _args, kwargs = _find(fake_arm.calls, "effector.suck")
+    assert kwargs.get("enable") is True
+
+
 # --------------------------------------------------------------------------- #
 # IO delegation
 # --------------------------------------------------------------------------- #

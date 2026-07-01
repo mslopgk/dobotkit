@@ -240,26 +240,38 @@ class ArmController:
 
     # -- end effector ----------------------------------------------------- #
 
-    def suck(self, on: bool) -> ActionResult:
-        """Turn the suction cup on (grab) or off (release)."""
+    def suck(self, on: bool, *, enable: bool = True) -> ActionResult:
+        """Drive the suction cup.
+
+        ``on`` is the vacuum state (grab vs release); ``enable`` powers the air
+        pump. Pass ``enable=False`` to switch the pump off entirely.
+        """
         try:
-            self._require_device().effector.suck(bool(on))
-            return ActionResult(True, f"Suction {'on' if on else 'off'}")
+            self._require_device().effector.suck(bool(on), enable=bool(enable))
+            if not enable:
+                return ActionResult(True, "Suction pump off")
+            return ActionResult(True, f"Suction {'on' if on else 'released'}")
         except DobotError as exc:
             return ActionResult(False, f"Suck failed: {exc}")
 
-    def grip(self, on: bool) -> ActionResult:
-        """Close the gripper (``on=True``) or open it."""
+    def grip(self, on: bool, *, enable: bool = True) -> ActionResult:
+        """Drive the gripper.
+
+        ``on`` closes (``True``) / opens (``False``) it; ``enable`` powers the
+        air pump. Pass ``enable=False`` to switch the pump off entirely.
+        """
         try:
-            self._require_device().effector.grip(bool(on))
+            self._require_device().effector.grip(bool(on), enable=bool(enable))
+            if not enable:
+                return ActionResult(True, "Gripper pump off")
             return ActionResult(True, f"Gripper {'closed' if on else 'open'}")
         except DobotError as exc:
             return ActionResult(False, f"Grip failed: {exc}")
 
-    def laser(self, on: bool) -> ActionResult:
-        """Switch the laser on or off."""
+    def laser(self, on: bool, *, enable: bool = True) -> ActionResult:
+        """Switch the laser on or off (``enable`` powers the control circuit)."""
         try:
-            self._require_device().effector.laser(bool(on))
+            self._require_device().effector.laser(bool(on), enable=bool(enable))
             return ActionResult(True, f"Laser {'on' if on else 'off'}")
         except DobotError as exc:
             return ActionResult(False, f"Laser failed: {exc}")

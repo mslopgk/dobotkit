@@ -55,16 +55,22 @@ class _RecordingGroup:
 class FakeEffectorGroup(_RecordingGroup):
     """Mirror of :class:`dobotkit.arm.groups.EffectorGroup` (recording)."""
 
-    def suck(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        self._record("suck", on, queued=queued)
+    def suck(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        self._record("suck", on, enable=enable, queued=queued)
         return None
 
-    def grip(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        self._record("grip", on, queued=queued)
+    def grip(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        self._record("grip", on, enable=enable, queued=queued)
         return None
 
-    def laser(self, on: bool, *, queued: bool = True) -> Optional[int]:
-        self._record("laser", on, queued=queued)
+    def laser(
+        self, on: bool, *, enable: bool = True, queued: bool = True
+    ) -> Optional[int]:
+        self._record("laser", on, enable=enable, queued=queued)
         return None
 
 
