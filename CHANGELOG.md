@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Protocol command IDs verified against the official Dobot Communication
+  Protocol.** Cross-checked all 98 command IDs against the official protocol
+  (V1.1.5 PDF from `download.dobot.cc`) and Dobot's SDK `ProtocolID.h` /
+  Magician-Lite `cmd_id.h`. 84/98 are now confirmed (73 verified, 11 corrected).
+  Corrected genuinely wrong IDs — a rotated CP-command block
+  (CP2 / CPLE / CPCommon / CPRHold values were swapped), the CAL/angle-sensor
+  block (211–214 → official 140–143), `DeviceWithL` (6 → 3), `GetUserParams`
+  (14 → 220), `GetUART4PeripheralsType` (8 → 181) — and removed two duplicate
+  members. The 14 remaining `# unverified` IDs are DLL-name-only calls and
+  MagicBox/Seeed Grove extensions with no public wire ID.
+
 ## [0.1.0] - 2026-06-30
 
 Initial release of `dobotkit` — a complete, pure-Python control library for the
@@ -53,14 +66,14 @@ Windows, macOS, or Linux.
 
 ### Known limitations / caveats
 
-- **Unverified protocol command IDs.** The arm protocol command IDs were
-  reconstructed from `pydobot` seed values, `DobotDllType` struct layouts, and
-  the documented categorical numbering scheme. IDs that are *not* confirmed by
-  the `pydobot` seed are tagged `# unverified` in the source and should be
-  confirmed against firmware / official Dobot protocol documentation or on
-  hardware. (The struct **byte-layouts** are independently verified offline
-  against `DobotDllType` by the golden-oracle tests — the `# unverified` caveat
-  applies to *command-ID values*, not to packing.)
+- **A few protocol command IDs remain unverified.** Most command IDs are now
+  verified against the official Dobot protocol (see *Unreleased → Fixed*), but
+  14 remain tagged `# unverified`: DLL-name-only calls with no public wire ID
+  (motor-mode, speed-ratio, restart-magic-box, fw-ready) and the MagicBox/Seeed
+  Grove sensor extensions. Confirm these on hardware or against MagicBox-specific
+  docs before relying on them. (Struct **byte-layouts** are independently
+  verified offline against `DobotDllType` by the golden-oracle tests — this
+  caveat applies to *command-ID values*, not to packing.)
 - **GO built-in closed-loop commands can hang.** The device-side closed-loop
   commands (`rotate`, `move_dist`, `arc_*`, `*_closed_loop`) may block
   indefinitely; prefer `PreciseMover` / `WaypointNav`, which close the loop in

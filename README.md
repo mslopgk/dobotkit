@@ -206,19 +206,24 @@ exact command value against hardware.
   `DobotDllType` in golden-oracle tests (the oracle is loaded offline, never as a
   runtime dependency, and never requires the DLL). So the *shape and packing* of
   each payload is verified.
-- **Command IDs are partially reconstructed.** Protocol command IDs were
-  reconstructed from verified `pydobot` seed values, `DobotDllType` struct
-  layouts, and documented categorical numbering. Values **not** confirmed by the
-  `pydobot` seed are tagged `# unverified` in the source. They should be
-  confirmed against firmware / official Dobot protocol documentation or on real
-  hardware before being trusted in production.
+- **Command IDs: 84 of 98 verified against the official protocol.** Protocol
+  command IDs were cross-checked against the **official Dobot Communication
+  Protocol** (V1.1.5 PDF from `download.dobot.cc`) and Dobot's SDK
+  `ProtocolID.h` / Magician-Lite `cmd_id.h`. 84/98 IDs are now confirmed
+  (73 verified as published, 11 corrected to match the official sources —
+  including a genuinely wrong CP-command block and the CAL/angle-sensor block).
+  The remaining **14 are tagged `# unverified`**: DLL-name-only calls with no
+  public wire ID (motor-mode, speed-ratio, restart-magic-box, fw-ready) and the
+  MagicBox/Seeed Grove sensor extensions, which are not in the public protocol
+  and need on-hardware or MagicBox-doc confirmation.
 - **GO turn direction is unconfirmed.** The GO closed-loop turn direction (yaw
   sign convention) still needs on-hardware confirmation, and the built-in
   closed-loop commands can hang (see **Safety**).
 
-In short: the **coverage is complete** and the **struct layouts are verified
-offline**; the parts that still want hardware confirmation are explicitly tagged
-`# unverified` in the code so you know exactly what to check.
+In short: the **coverage is complete**, the **struct layouts are verified
+offline**, and **most command IDs are now verified against the official Dobot
+protocol**; the few parts that still want hardware confirmation are explicitly
+tagged `# unverified` in the code so you know exactly what to check.
 
 ---
 
