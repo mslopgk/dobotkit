@@ -101,6 +101,15 @@ def test_connect_disconnect_delegate_to_lowlevel():
     ll.disconnect.assert_called_once_with()
 
 
+def test_connect_starts_queue_so_standalone_queued_aliases_execute():
+    # Mirrors pydobot, which starts the on-device queue at construction. Without
+    # this, a standalone arm.suck(True) / grip / wait would be enqueued but never
+    # execute until a later waited motion started the queue.
+    m, ll = make_magician_with_fake_ll()
+    m.connect()
+    ll.queue.start.assert_called_once_with()
+
+
 # --------------------------------------------------------------------------- #
 # Context manager
 # --------------------------------------------------------------------------- #
@@ -281,11 +290,14 @@ def test_pose_callable_returns_pydobot_tuple():
     assert m.pose() == (1, 2, 3, 4, 5, 6, 7, 8)
 
 
-def test_get_eio_reads_digital_input():
+def test_get_eio_reads_digital_output():
+    # pydobot's get_eio issues protocol 131 (GetIODO, rw=0): it reads back the
+    # digital-OUTPUT register that set_eio writes, not a digital input.
     m, ll = make_magician_with_fake_ll()
-    ll.get_io_di.return_value = MagicMock(level=1)
+    ll.get_io_do.return_value = MagicMock(level=1)
     assert m.get_eio(5) == 1
-    ll.get_io_di.assert_called_once_with(5)
+    ll.get_io_do.assert_called_once_with(5)
+    ll.get_io_di.assert_not_called()
 
 
 def test_set_eio_writes_digital_output():

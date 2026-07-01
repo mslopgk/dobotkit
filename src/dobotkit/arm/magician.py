@@ -21,7 +21,10 @@ Design highlights
   when any fault is active, rather than driving the arm into a faulted state.
 * **pydobot compatibility.** ``suck`` / ``grip`` / ``speed`` / ``wait`` /
   ``pose`` / ``get_eio`` / ``set_eio`` / ``move_to`` mirror ``pydobot.Dobot`` so
-  existing scripts port with minimal changes.
+  existing scripts port with minimal changes. Like ``pydobot.Dobot`` (which
+  starts the queue at construction), :meth:`connect` starts the on-device queue
+  so a standalone queued alias -- ``suck`` / ``grip`` / ``wait`` -- actually
+  executes rather than sitting unexecuted until a later waited motion.
 """
 from __future__ import annotations
 
@@ -103,8 +106,17 @@ class Magician:
     # -- lifecycle ---------------------------------------------------------
 
     def connect(self) -> None:
-        """Open the connection to the arm."""
+        """Open the connection to the arm and start the on-device queue.
+
+        Starting the queue here mirrors ``pydobot.Dobot`` (which issues
+        ``SetQueuedCmdStartExec`` at construction). Without it, the queued
+        pydobot-compat aliases (:meth:`suck` / :meth:`grip` / :meth:`wait`) would
+        be appended but never executed until some later ``wait=True`` motion
+        happened to start the queue -- a silent no-op for the standalone-port
+        scenario those aliases advertise.
+        """
         self._ll.connect()
+        self._ll.queue.start()
 
     def disconnect(self) -> None:
         """Close the connection to the arm."""
@@ -346,8 +358,14 @@ class Magician:
         return (p.x, p.y, p.z, p.r, p.j1, p.j2, p.j3, p.j4)
 
     def get_eio(self, addr: int) -> int:
-        """pydobot alias: read the digital-input level of IO pin ``addr``."""
-        return self._io.get_di(addr)
+        """pydobot alias: read back the digital-OUTPUT level of IO pin ``addr``.
+
+        Mirrors ``pydobot.Dobot.get_eio``, which issues protocol command 131
+        (``GetIODO``) with ``rw=0`` -- i.e. it reads the digital-*output*
+        register that :meth:`set_eio` writes, not a digital *input*. Use
+        :meth:`io.get_di` if you want to sample an input pin.
+        """
+        return self._io.get_do(addr)
 
     def set_eio(self, addr: int, val: int) -> Optional[int]:
         """pydobot alias: set the digital-output level of IO pin ``addr``."""

@@ -15,17 +15,18 @@ authoritative artifacts:
 2. the official **Dobot-Arm / DobotLink Magician-Lite ``cmd_id.h``**.
 
 As of this pass **72 command values are verified** against those sources (tagged
-``# verified``), and **16 were corrected** to match them (tagged
-``# corrected``). The remaining members are DobotDll *function-name-only* calls
-with no public protocol id in either header (and several collide with unrelated
-Magician-Lite commands); they stay tagged ``# unverified`` pending hardware or
-official-doc confirmation.
+``# verified``) and **12 were corrected** to match them (tagged ``# corrected``)
+-- 84 of 98 confirmed in total. The remaining **14** members are DobotDll
+*function-name-only* calls with no public protocol id in either header (and
+several collide with unrelated Magician-Lite commands); they stay tagged
+``# unverified`` pending hardware or official-doc confirmation.
 
 Known naming / structural discrepancies that could not be applied to ``ids.py``
 alone without breaking shipping code are recorded in the code review notes for
-this change (fabricated ``GET_DEVICE_ID`` / ``GET_DEVICE_INFO`` members,
-``GET_AUTO_LEVELING`` folding into id 32, and ``GET_QUEUED_CMD_MOTION_FINISH``
-whose id 247 is really ``QueuedCmdLeftSpace``).
+this change (fabricated ``GET_DEVICE_ID`` / ``GET_DEVICE_INFO`` members and
+``GET_AUTO_LEVELING`` folding into id 32). ``GET_QUEUED_CMD_MOTION_FINISH`` was
+corrected from the ``QueuedCmdLeftSpace`` slot (247) to the real MotionFinish
+slot (248, QueuedCmdBase+8).
 
 Protocol-id constraint: the wire frame stores the command id in a single byte,
 so every ``ProtocolId`` value must lie in ``range(0, 256)``. The uniqueness test
@@ -204,11 +205,13 @@ class ProtocolId(IntEnum):
     SET_QUEUED_CMD_STOP_DOWNLOAD = 244  # verified: official ProtocolID.h
     SET_QUEUED_CMD_CLEAR = 245  # verified: official ProtocolID.h + Magician-Lite cmd_id.h
     GET_QUEUED_CMD_CURRENT_INDEX = 246  # verified: official ProtocolID.h
-    # verified value 247 (QueuedCmdBase+7) per both official headers. NAME NOTE:
-    # id 247 is really ProtocolQueuedCmdLeftSpace (remaining queue space), not
-    # "MotionFinish". Kept under the current name because shipping queue.py's
-    # motion_finished() + tests reference it; see review notes for the rename.
-    GET_QUEUED_CMD_MOTION_FINISH = 247  # verified (value); name is QueuedCmdLeftSpace
+    # corrected: id 247 (QueuedCmdBase+7) is ProtocolQueuedCmdLeftSpace, NOT
+    # MotionFinish (V1.1.5 changelog explicitly deletes GetQueuedCmdLeftspace at
+    # 247; the base doc's QueuedCmd block ends at CurrentIndex=246). MotionFinish
+    # is the next slot, QueuedCmdBase+8 = 248, and returns a uint8 isFinish bool.
+    # queue.py's motion_finished() sends this id and unpacks '<?' (one bool byte),
+    # so the value must be 248 (the 247 LeftSpace reply is a uint32 count).
+    GET_QUEUED_CMD_MOTION_FINISH = 248  # corrected: QueuedCmdMotionFinish = QueuedCmdBase+8
 
     # --- Firmware upgrade (250-259) ---
     SET_GET_UPGRADE_FW_READY = 250  # unverified (firmware-upgrade-ready handshake)
