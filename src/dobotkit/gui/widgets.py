@@ -35,6 +35,7 @@ __all__ = [
     "JogButton",
     "LogView",
     "StatusBar",
+    "ScrollableFrame",
 ]
 
 
@@ -261,3 +262,79 @@ class StatusBar(ttk.Frame):
     def text(self) -> str:
         """The current status text."""
         return self._var.get()
+
+
+class ScrollableFrame(ttk.Frame):
+    """A vertically scrollable container: put content in :attr:`interior`.
+
+    Tk frames do not scroll on their own, so a panel taller than its notebook tab
+    simply clips its lower sections. This wraps a :class:`tkinter.Canvas` +
+    vertical :class:`ttk.Scrollbar` and exposes an inner :attr:`interior` frame to
+    fill with widgets; the scrollregion tracks the interior's height and the mouse
+    wheel scrolls whichever :class:`ScrollableFrame` the pointer is over.
+
+    Usage::
+
+        scroll = ScrollableFrame(notebook)
+        panel = ArmPanel(scroll.interior, controller, log)
+        panel.pack(fill="both", expand=True)
+        notebook.add(scroll, text="Arm")
+    """
+
+    def __init__(self, master: tk.Misc, **kwargs: Any) -> None:
+        super().__init__(master, **kwargs)
+        self._canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
+        vbar = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vbar.set)
+        vbar.grid(row=0, column=1, sticky="ns")
+        self._canvas.grid(row=0, column=0, sticky="nsew")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        #: The frame to place scrollable content into.
+        self.interior = ttk.Frame(self._canvas)
+        self._window = self._canvas.create_window(
+            (0, 0), window=self.interior, anchor="nw"
+        )
+
+        # Grow the scrollregion to the interior's natural size...
+        self.interior.bind("<Configure>", self._on_interior_configure)
+        # ...and make the interior track the canvas width (content fills width,
+        # so only vertical scrolling is needed).
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # Wheel scrolling: bound globally, but each instance only acts when the
+        # pointer is over its own canvas subtree (so multiple scrollables and the
+        # notebook coexist). Linux uses Button-4/5; Windows/macOS use MouseWheel.
+        self._canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+        self._canvas.bind_all("<Button-4>", self._on_mousewheel, add="+")
+        self._canvas.bind_all("<Button-5>", self._on_mousewheel, add="+")
+
+    def _on_interior_configure(self, _event: "tk.Event[Any]") -> None:
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event: "tk.Event[Any]") -> None:
+        self._canvas.itemconfigure(self._window, width=event.width)
+
+    def _pointer_over_self(self, x_root: int, y_root: int) -> bool:
+        """Whether the pointer at (x_root, y_root) is within this canvas subtree."""
+        try:
+            widget: Optional[tk.Misc] = self._canvas.winfo_containing(x_root, y_root)
+        except (KeyError, tk.TclError):
+            return False
+        while widget is not None:
+            if widget is self._canvas:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _on_mousewheel(self, event: "tk.Event[Any]") -> None:
+        if not self._pointer_over_self(event.x_root, event.y_root):
+            return
+        if getattr(event, "num", None) == 4:
+            step = -1
+        elif getattr(event, "num", None) == 5:
+            step = 1
+        else:
+            step = -1 if event.delta > 0 else 1
+        self._canvas.yview_scroll(step, "units")

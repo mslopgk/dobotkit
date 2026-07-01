@@ -43,7 +43,7 @@ from dobotkit.gui.arm_controller import ArmController
 from dobotkit.gui.arm_panel import ArmPanel
 from dobotkit.gui.go_controller import GoController
 from dobotkit.gui.go_panel import GoPanel
-from dobotkit.gui.widgets import LogView, StatusBar
+from dobotkit.gui.widgets import LogView, ScrollableFrame, StatusBar
 
 if TYPE_CHECKING:
     # Only needed to name the injection-boundary cast targets below; kept behind
@@ -206,11 +206,21 @@ class App(tk.Tk):
 
         # Log tab first so a shared log(...) sink exists before the panels build.
         self.log_view = LogView(notebook, height=20, width=90)
-        self.arm_panel = ArmPanel(notebook, arm_controller, self.log)
-        self.go_panel = GoPanel(notebook, go_controller, self.log)
 
-        notebook.add(self.arm_panel, text="Arm")
-        notebook.add(self.go_panel, text="GO")
+        # The arm/GO panels stack many sections vertically and can be taller than
+        # the window, so host each in a ScrollableFrame -- otherwise the lower
+        # sections (Sensors / Alarms, Navigation / Camera) are clipped with no way
+        # to reach them. The panel fills the scrollable's interior.
+        arm_scroll = ScrollableFrame(notebook)
+        self.arm_panel = ArmPanel(arm_scroll.interior, arm_controller, self.log)
+        self.arm_panel.pack(fill="both", expand=True)
+
+        go_scroll = ScrollableFrame(notebook)
+        self.go_panel = GoPanel(go_scroll.interior, go_controller, self.log)
+        self.go_panel.pack(fill="both", expand=True)
+
+        notebook.add(arm_scroll, text="Arm")
+        notebook.add(go_scroll, text="GO")
         notebook.add(self.log_view, text="Log")
 
         self.status = StatusBar(self, initial="Ready")
