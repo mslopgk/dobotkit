@@ -42,14 +42,3 @@ strict = true
 [[tool.mypy.overrides]]
 module = ["serial", "serial.*"]
 ignore_missing_imports = true
-
-# The GUI layer is Tkinter view code: widget subclasses forward **kwargs to
-# stdlib ttk widgets and event handlers take loosely-typed Tk events, so full
-# strict typing adds noise without catching real bugs. Relax the untyped/any
-# gates here (the controller/logic layer stays under the strict gate above).
-[[tool.mypy.overrides]]
-module = ["dobotkit.gui.*"]
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
