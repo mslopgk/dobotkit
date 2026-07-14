@@ -25,18 +25,19 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only, not imported at runtime
     from .client import DobotLinkClient
     from .magiciango import MagicianGO
-    from .navigation import PreciseMover, WaypointNav
+    from .navigation import NavigationAborted, PreciseMover, WaypointNav
 
 # Public name -> (submodule, attribute). Deferred to first access so importing
 # this subpackage never eagerly imports ``websockets``.
 _LAZY = {
     "DobotLinkClient": ("dobotkit.go.client", "DobotLinkClient"),
     "MagicianGO": ("dobotkit.go.magiciango", "MagicianGO"),
+    "NavigationAborted": ("dobotkit.go.navigation", "NavigationAborted"),
     "PreciseMover": ("dobotkit.go.navigation", "PreciseMover"),
     "WaypointNav": ("dobotkit.go.navigation", "WaypointNav"),
 }
 
-__all__ = ["DobotLinkClient", "MagicianGO", "PreciseMover", "WaypointNav"]
+__all__ = ["DobotLinkClient", "MagicianGO", "NavigationAborted", "PreciseMover", "WaypointNav"]
 
 
 def __getattr__(name: str) -> Any:

@@ -148,14 +148,14 @@ def test_emergency_stop_uses_notify_not_call():
     )
 
 
-# ---- closed-loop (HANG-warned) ---------------------------------------------
+# ---- closed-loop (HANG-warned; canonical names carry the unsafe_ prefix) ----
 
 _WAIT_KEYS = {"isQueued": True, "isWaitForFinish": True, "timeout": 604800000}
 
 
-def test_rotate_includes_queue_flags():
+def test_unsafe_rotate_includes_queue_flags():
     go, fc = make_go()
-    go.rotate(r=90, Vr=30)
+    go.unsafe_rotate(r=90, Vr=30)
     method, params = fc.calls[0]
     assert method == "MagicianGO.SetRotate"
     assert params["r"] == 90 and params["Vr"] == 30
@@ -164,9 +164,9 @@ def test_rotate_includes_queue_flags():
     assert params["portName"] == "COM5"
 
 
-def test_move_dist_includes_queue_flags():
+def test_unsafe_move_dist_includes_queue_flags():
     go, fc = make_go()
-    go.move_dist(x=30, y=0, Vx=30, Vy=0)
+    go.unsafe_move_dist(x=30, y=0, Vx=30, Vy=0)
     method, params = fc.calls[0]
     assert method == "MagicianGO.SetMoveDist"
     assert (params["x"], params["y"], params["Vx"], params["Vy"]) == (30, 0, 30, 0)
@@ -174,9 +174,9 @@ def test_move_dist_includes_queue_flags():
         assert params[k] == v
 
 
-def test_arc_rad_includes_queue_flags():
+def test_unsafe_arc_rad_includes_queue_flags():
     go, fc = make_go()
-    go.arc_rad(velocity=30, radius=50, angle=30, mode=0)
+    go.unsafe_arc_rad(velocity=30, radius=50, angle=30, mode=0)
     method, params = fc.calls[0]
     assert method == "MagicianGO.SetArcRad"
     assert (params["velocity"], params["radius"], params["angle"], params["mode"]) == (30, 50, 30, 0)
@@ -184,9 +184,9 @@ def test_arc_rad_includes_queue_flags():
         assert params[k] == v
 
 
-def test_arc_cent_includes_queue_flags():
+def test_unsafe_arc_cent_includes_queue_flags():
     go, fc = make_go()
-    go.arc_cent(velocity=30, x=50, y=0, angle=30, mode=0)
+    go.unsafe_arc_cent(velocity=30, x=50, y=0, angle=30, mode=0)
     method, params = fc.calls[0]
     assert method == "MagicianGO.SetArcCent"
     assert (params["velocity"], params["x"], params["y"], params["angle"], params["mode"]) == \
@@ -205,14 +205,39 @@ def test_coord_closed_loop_has_no_wait_flags():
     assert "isQueued" not in params
 
 
-def test_increment_closed_loop_includes_queue_flags():
+def test_unsafe_increment_closed_loop_includes_queue_flags():
     go, fc = make_go()
-    go.increment_closed_loop(x=30, y=0, angle=0)
+    go.unsafe_increment_closed_loop(x=30, y=0, angle=0)
     method, params = fc.calls[0]
     assert method == "MagicianGO.SetIncrementClosedLoop"
     assert (params["x"], params["y"], params["angle"]) == (30, 0, 0)
     for k, v in _WAIT_KEYS.items():
         assert params[k] == v
+
+
+def test_deprecated_hang_aliases_warn_and_delegate():
+    # The old bare names must still work (compat) but emit a UserWarning and
+    # send the same RPC as their unsafe_ canonical counterparts.
+    import pytest
+
+    cases = [
+        (lambda go: go.rotate(r=90, Vr=30), "MagicianGO.SetRotate"),
+        (lambda go: go.move_dist(x=30, y=0, Vx=30, Vy=0), "MagicianGO.SetMoveDist"),
+        (lambda go: go.arc_rad(velocity=30, radius=50, angle=30, mode=0),
+         "MagicianGO.SetArcRad"),
+        (lambda go: go.arc_cent(velocity=30, x=50, y=0, angle=30, mode=0),
+         "MagicianGO.SetArcCent"),
+        (lambda go: go.increment_closed_loop(x=30, y=0, angle=0),
+         "MagicianGO.SetIncrementClosedLoop"),
+    ]
+    for invoke, expected_method in cases:
+        go, fc = make_go()
+        with pytest.warns(UserWarning, match="HANG"):
+            invoke(go)
+        method, params = fc.calls[0]
+        assert method == expected_method
+        for k, v in _WAIT_KEYS.items():
+            assert params[k] == v
 
 
 # ---- safety: clearance_ok --------------------------------------------------
@@ -294,11 +319,45 @@ def test_buzzer():
 
 # ---- sensors ---------------------------------------------------------------
 
-def test_ultrasonic():
+def test_ultrasonic_validates_and_clamps():
+    # Hardware clamps at 40 cm — readings above the ceiling are normalised down
+    # so callers can't mistake ">=40" for a precise long-range measurement.
     go, fc = make_go(results={"MagicianGO.GetUltrasoundData":
                               {"front": 30, "back": 40, "left": 50, "right": 60}})
-    assert go.ultrasonic() == {"front": 30, "back": 40, "left": 50, "right": 60}
+    assert go.ultrasonic() == {"front": 30, "back": 40, "left": 40, "right": 40}
     assert fc.calls[0] == ("MagicianGO.GetUltrasoundData", {"portName": "COM5"})
+
+
+def test_ultrasonic_missing_key_returns_none():
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData":
+                             {"front": 30, "back": 40, "left": 40}})
+    assert go.ultrasonic() is None
+
+
+def test_ultrasonic_sentinel_returns_none():
+    # 0/negative values are absent-sensor sentinels -> unknown -> None.
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData":
+                             {"front": 0, "back": 40, "left": 40, "right": 40}})
+    assert go.ultrasonic() is None
+
+
+def test_ultrasonic_non_dict_returns_none():
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData": None})
+    assert go.ultrasonic() is None
+
+
+def test_ultrasonic_raw_passes_through():
+    raw = {"front": 55, "back": 40, "left": 40, "right": 40, "extra": 1}
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData": raw})
+    assert go.ultrasonic_raw() == raw
+
+
+def test_clearance_ok_blocks_on_invalid_ultrasonic():
+    # Unknown means stop: a malformed read is itself a blocking reason.
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData": {"front": 40}})
+    ok, info = go.clearance_ok(x=10, threshold=20)
+    assert ok is False
+    assert "invalid" in info
 
 
 def test_odometer():
@@ -336,19 +395,27 @@ def test_imu_speed():
 # ---- line-trace ------------------------------------------------------------
 
 def test_auto_trace_sends_loop_then_auto():
+    # Hardware-verified (2026-07-02): the plugin declares isTrace as *int* —
+    # a JSON bool parses as 0 and the command is silently ignored. type=0 is
+    # required too (DobotLab sends exactly {isTrace: 1, type: 0}).
     go, fc = make_go()
     go.auto_trace(True)
     assert fc.calls[0][0] == "MagicianGO.SetTraceLoop"
     assert fc.calls[0][1]["enable"] is True
     assert fc.calls[1][0] == "MagicianGO.SetTraceAuto"
-    assert fc.calls[1][1]["isTrace"] is True
+    assert fc.calls[1][1]["isTrace"] == 1
+    assert isinstance(fc.calls[1][1]["isTrace"], int)
+    assert not isinstance(fc.calls[1][1]["isTrace"], bool)  # bool would no-op
+    assert fc.calls[1][1]["type"] == 0
 
 
-def test_auto_trace_off_coerces_bool():
+def test_auto_trace_off_sends_int_zero():
     go, fc = make_go()
     go.auto_trace(0)
     assert fc.calls[0][1]["enable"] is False
-    assert fc.calls[1][1]["isTrace"] is False
+    assert fc.calls[1][1]["isTrace"] == 0
+    assert not isinstance(fc.calls[1][1]["isTrace"], bool)
+    assert fc.calls[1][1]["type"] == 0
 
 
 def test_trace_speed():
@@ -390,3 +457,251 @@ def test_arm_camera_tag():
     go, fc = make_go(results={"MagicianGO.GetArmCameraTag": {"tags": []}})
     assert go.arm_camera_tag() == {"tags": []}
     assert fc.calls[0] == ("MagicianGO.GetArmCameraTag", {"portName": "COM5"})
+
+
+# ---- trace_angle normalisation / line_error ---------------------------------
+
+def test_trace_angle_malformed_degrades_to_no_line():
+    go, _ = make_go(results={"MagicianGO.GetCarCameraAngle": None})
+    assert go.trace_angle() == {"angle": 0, "count": 0}
+
+
+def test_line_error_reports_signed_offset():
+    go, _ = make_go(results={"MagicianGO.GetCarCameraAngle": {"angle": 250, "count": 1}})
+    assert go.line_error(center=245) == 5.0
+
+
+def test_line_error_none_when_no_line():
+    # count == 0 means "no line" -> None (not error 0, which would drive straight).
+    go, _ = make_go(results={"MagicianGO.GetCarCameraAngle": {"angle": 250, "count": 0}})
+    assert go.line_error(center=245) is None
+
+
+# ---- speed cap / dead-man drive ---------------------------------------------
+
+def test_move_clamps_speed_magnitude():
+    go, fc = make_go()
+    go.move(x=1000, y=-999, r=31)
+    _, params = fc.calls[0]
+    assert params["x"] == 30.0
+    assert params["y"] == -30.0
+    assert params["r"] == 30.0
+
+
+def test_move_within_cap_passes_through():
+    go, fc = make_go()
+    go.move(x=10, y=0, r=5)
+    _, params = fc.calls[0]
+    assert (params["x"], params["y"], params["r"]) == (10, 0, 5)
+
+
+def test_drive_for_moves_then_always_stops(monkeypatch):
+    from dobotkit.go import magiciango as mod
+
+    slept = []
+    monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+    go, fc = make_go()
+    go.drive_for(x=15, seconds=0.4)
+    # move -> (sleep) -> emergency_stop (notify) -> confirming stop (call).
+    assert fc.calls[0][0] == "MagicianGO.SetMoveSpeed"
+    assert fc.calls[0][1]["x"] == 15
+    assert slept == [0.4]
+    assert fc.notifies[0][0] == "MagicianGO.SetMoveSpeed"
+    assert fc.notifies[0][1] == {"portName": "COM5", "x": 0, "y": 0, "r": 0}
+    assert fc.calls[-1][1] == {"x": 0, "y": 0, "r": 0, "portName": "COM5"}
+
+
+def test_drive_for_clamps_duration(monkeypatch):
+    from dobotkit.go import magiciango as mod
+
+    slept = []
+    monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+    go, _ = make_go()
+    go.drive_for(x=10, seconds=60)
+    assert slept == [5.0]
+
+
+# ---- context manager / open() -----------------------------------------------
+
+def test_context_manager_teardown_on_exception():
+    # A crash inside the with-block must still turn tracing OFF, force-stop the
+    # firmware command queue (an escaped queued move keeps executing in
+    # firmware — SetMoveSpeed(0) does not stop queue execution) and fire the
+    # no-wait emergency stop — a crashed script must never leave the car driving.
+    import pytest
+
+    go, fc = make_go()
+    with pytest.raises(RuntimeError):
+        with go:
+            go.forward(15)
+            raise RuntimeError("student code crashed")
+    trace_off = fc.find_call("MagicianGO.SetTraceAuto")
+    assert trace_off is not None
+    assert trace_off[1]["isTrace"] == 0 and trace_off[1]["type"] == 0
+    queue_stop = fc.find_call("MagicianGO.SetCmdQueueForcelyStop")
+    assert queue_stop is not None
+    assert queue_stop[1] == {"portName": "COM5"}
+    # Queue force-stop comes AFTER the trace-off (order: notify-stop ->
+    # trace off -> queue force-stop -> notify-stop again).
+    methods = fc.methods_called()
+    assert methods.index("MagicianGO.SetTraceAuto") \
+        < methods.index("MagicianGO.SetCmdQueueForcelyStop")
+    assert ("MagicianGO.SetMoveSpeed", {"portName": "COM5", "x": 0, "y": 0, "r": 0}) \
+        in fc.notifies
+
+
+def test_context_manager_teardown_swallows_errors():
+    class ExplodingClient(FakeClient):
+        def call(self, method, **params):
+            raise RuntimeError("link died")
+
+    go = MagicianGO(ExplodingClient(), port_name="COM5")
+    with go:
+        pass  # teardown must not raise even though every call explodes
+
+
+def test_open_connects_verifies_and_owns_client(monkeypatch):
+    from dobotkit.go import client as client_mod
+
+    created = {}
+
+    class StubClient:
+        def __init__(self, host="localhost", port=9090, timeout=10.0, **_):
+            created["args"] = (host, port, timeout)
+            self.fake = FakeClient(
+                results={"MagicianGO.GetBatteryVoltage": {"powerVoltage": 11.7}}
+            )
+            self.closed = False
+
+        def connect(self):
+            return self
+
+        def close(self):
+            self.closed = True
+
+        def call(self, method, **params):
+            return self.fake.call(method, **params)
+
+        def notify(self, method, **params):
+            self.fake.notify(method, **params)
+
+    monkeypatch.setattr(client_mod, "DobotLinkClient", StubClient)
+    with MagicianGO.open(port_name="COM7", timeout=3.0) as go:
+        assert go.port_name == "COM7"
+        methods = go._client.fake.methods_called()
+        assert methods[0] == "MagicianGO.ConnectDobot"       # connect
+        assert "MagicianGO.GetBatteryVoltage" in methods      # link verification
+    assert created["args"] == ("localhost", 9090, 3.0)
+    assert go._client.closed is True                          # owned socket closed
+
+
+# ---- adversarial-review regressions (2026-07-03 verification findings) -------
+
+def test_move_nan_refuses_to_drive():
+    # Naive max(min(...)) clamping turns NaN into +SPEED_CAP (full speed!)
+    # because NaN comparisons are False — non-finite input must map to 0.
+    go, fc = make_go()
+    go.move(x=float("nan"), y=float("inf"), r=float("-inf"))
+    _, params = fc.calls[0]
+    assert params["x"] == 0.0
+    assert params["y"] == 0.0
+    assert params["r"] == 0.0
+
+
+def test_ultrasonic_nan_returns_none():
+    # NaN passes `<= 0` and isinstance(float) checks and would then defeat
+    # clearance_ok (`nan < threshold` is False -> reads as clear).
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData":
+                             {"front": float("nan"), "back": 35,
+                              "left": 35, "right": 35}})
+    assert go.ultrasonic() is None
+
+
+def test_clearance_ok_blocks_on_nan_reading():
+    go, _ = make_go(results={"MagicianGO.GetUltrasoundData":
+                             {"front": float("nan"), "back": 35,
+                              "left": 35, "right": 35}})
+    ok, info = go.clearance_ok(x=10, threshold=20)
+    assert ok is False
+
+
+def test_move_direct_clamps_speed():
+    # move_direct is a continuous-velocity command too — the SPEED_CAP
+    # invariant ("nothing larger ever on the wire") must hold for it as well.
+    go, fc = make_go()
+    go.move_direct(direction=0, speed=200)
+    _, params = fc.calls[0]
+    assert params["speed"] == 30.0
+
+
+def test_context_manager_estop_fires_before_blocking_trace_off():
+    # On a degraded link the no-wait emergency stop must go out FIRST —
+    # a blocking auto_trace(False) can stall for the full client timeout.
+    order = []
+
+    class OrderClient(FakeClient):
+        def call(self, method, **params):
+            order.append(("call", method))
+            return super().call(method, **params)
+
+        def notify(self, method, **params):
+            order.append(("notify", method))
+            super().notify(method, **params)
+
+    go = MagicianGO(OrderClient(), port_name="COM5")
+    with go:
+        pass
+    assert order[0] == ("notify", "MagicianGO.SetMoveSpeed")  # e-stop first
+    # ...then the blocking trace-off, then the re-asserted e-stop.
+    call_methods = [m for kind, m in order if kind == "call"]
+    assert "MagicianGO.SetTraceAuto" in call_methods
+    assert order[-1] == ("notify", "MagicianGO.SetMoveSpeed")
+
+
+def test_navigation_aborted_is_a_dobot_error():
+    # Downstream consumers guard with `except DobotError` — NavigationAborted
+    # must be caught by them (dobotkit-gui contract: never raise into the UI).
+    from dobotkit.exceptions import DobotError
+    from dobotkit.go.navigation import NavigationAborted
+
+    exc = NavigationAborted({"aborted": True, "reason": "x", "target": 1, "achieved": 0})
+    assert isinstance(exc, DobotError)
+    assert isinstance(exc, RuntimeError)
+
+
+# ---- connected lifecycle flag -------------------------------------------------
+
+def test_connected_flag_lifecycle():
+    # Consumers (e.g. dobotkit-gui's GoController.is_connected) gate device
+    # features on go.connected — it must track the connection lifecycle.
+    go, fc = make_go(results={"MagicianGO.GetBatteryVoltage": {"powerVoltage": 11.7}})
+    assert go.connected is False                 # initial
+    go.connect()
+    assert go.connected is True                  # after verified connect
+    go.disconnect_robot()
+    assert go.connected is False                 # after disconnect
+
+
+def test_connected_flag_reset_when_verify_fails():
+    # False-success handshake: ConnectDobot "succeeds" but the battery
+    # verification read dies -> the device must NOT report itself connected.
+    import pytest
+
+    class DeadLinkClient(FakeClient):
+        def call(self, method, **params):
+            if method.endswith("GetBatteryVoltage"):
+                raise RuntimeError("link dead")
+            return super().call(method, **params)
+
+    go = MagicianGO(DeadLinkClient(), port_name="COM5")
+    with pytest.raises(RuntimeError):
+        go.connect(verify=True)
+    assert go.connected is False
+
+
+def test_connected_flag_cleared_on_context_exit():
+    go, fc = make_go(results={"MagicianGO.GetBatteryVoltage": {"powerVoltage": 11.7}})
+    go.connect()
+    with go:
+        assert go.connected is True
+    assert go.connected is False                 # session over after teardown

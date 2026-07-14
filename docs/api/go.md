@@ -4,7 +4,7 @@
 > 사람과 AI 에이전트가 코드 예제를 그대로 복사해 쓸 수 있도록 정리했습니다.
 
 - **대상 하드웨어**: Dobot Magician GO (전방향 주행 카 + 초음파/IMU/오도미터, 카메라, RGB LED, 부저, 라인트레이싱)
-- **라이브러리**: `dobotkit` — **순수 파이썬**(`websockets`만), DLL 불필요, 크로스플랫폼, `pip install dobotkit`.
+- **라이브러리**: `dobotkit` — **순수 파이썬**(`websockets`만), DLL 불필요, 크로스플랫폼. (PyPI 미게시 — `pip install -e <로컬 경로>`)
 - **임포트**: `from dobotkit import MagicianGO` + `from dobotkit.go.client import DobotLinkClient`.
 - **연결 구조**:
 
@@ -22,8 +22,9 @@ GO는 직접 구동하지 않습니다. 파이썬은 **DobotLink** 데스크톱 
 
 - **완전한 GO API 커버리지.** `MagicianGO`는 DobotLink의 `MagicianGO.*` JSON-RPC 표면 전체(연결/연속주행/폐루프/센서/안전/출력/라인트레이스/카메라)를 타입드 메서드로 래핑합니다.
 - **순수 파이썬.** `websockets`만 사용하며 DLL/네이티브 바이너리에 의존하지 않습니다. `pip`로 설치되고 크로스플랫폼입니다(단, DobotLink.exe는 Windows 전용 서비스).
-- ⚠️ **GO 내장 폐루프 명령은 HANG할 수 있습니다.** `rotate`/`move_dist`/`arc_rad`/`arc_cent`/`increment_closed_loop`는 이 기체에서 완료 콜백이 오지 않아 타임아웃(~7일)까지 **멈춥니다(HANG)**. 정밀 제어가 필요하면 `PreciseMover`/`WaypointNav`(연속 `move()` + 센서 피드백)를 사용하세요.
-- ⚠️ **GO 폐루프 회전 방향(yaw 부호)은 실제 하드웨어 확인이 필요합니다.** 문서의 방향 규약(`r+` = 좌회전/CCW)은 소프트웨어 측 가정이며, 펌웨어 enum 값(`move_direct`의 `direction`, `arc_*`의 `mode`, `set_running_mode`의 `mode`)도 소스로 확정되지 않아 **실측이 필요**합니다.
+- ⚠️ **GO 내장 폐루프 명령은 HANG할 수 있습니다.** `unsafe_rotate`/`unsafe_move_dist`/`unsafe_arc_rad`/`unsafe_arc_cent`/`unsafe_increment_closed_loop`(구명칭 `rotate` 등은 경고를 내는 폐기 별칭)는 이 기체에서 완료 콜백이 오지 않아 타임아웃(~7일)까지 **멈춥니다(HANG)**. 정밀 제어가 필요하면 `PreciseMover`/`WaypointNav`(연속 `move()` + 센서 피드백)를 사용하세요.
+- ✅ **회전 방향 규약은 실기 확정되었습니다 (2026-07-03).** `r+` = 좌회전(반시계/CCW) — `PreciseMover.turn_degrees(+90)` 실기에서 반시계 회전, 오차 1.5°. 단 펌웨어 enum 값(`move_direct`의 `direction`, `arc_*`의 `mode`, `set_running_mode`의 `mode`)은 여전히 **실측 필요**합니다.
+- 🆕 **확장 API 49종은 hardware-unverified입니다 (2026-07-04).** 진단/카메라 확장/큐 제어/MagicBox/디바이스 메서드(→ 3.9절)의 와이어 시그니처는 공식 소스 3중 교차검증(DobotEDU 파이썬 래퍼 + 공식 CHM + DobotLink 플러그인 프로토콜 테이블)으로 채굴했으나 **실기 실행은 0회**입니다. 검증 절차·순서는 [VERIFICATION_NEEDED_ko.md](../VERIFICATION_NEEDED_ko.md)를 따르세요.
 
 ---
 
@@ -33,7 +34,7 @@ GO는 직접 구동하지 않습니다. 파이썬은 **DobotLink** 데스크톱 
 2. **DobotLink.exe 실행** (보통 `C:\Users\<user>\AppData\Local\Programs\DobotLink\DobotLink.exe`).
    - 파이썬은 `ws://localhost:9090`으로 DobotLink에 붙고, DobotLink이 COM 포트로 GO에 연결합니다.
 3. GO가 붙은 **COM 포트** 확인(기본 가정값 `COM5`).
-4. 의존성: `pip install dobotkit` (런타임에 `websockets`만 사용).
+4. 의존성: `pip install -e <dobotkit 로컬 경로>` (PyPI 미게시; 런타임에 `websockets`만 사용).
 
 ---
 
@@ -48,7 +49,8 @@ go = MagicianGO(client, port_name="COM5")
 
 try:
     go.connect()                       # connect_robot() 후 battery()로 링크 검증
-    print("battery:", go.battery())    # 예: {'powerVoltage': 11.2, 'powerPercentage': 80}
+    print("battery:", go.battery())    # 예: {'powerVoltage': 11.7, 'powerPercentage': 0.99}
+                                       # (잔량 스케일은 펌웨어별 상이 — 참조 기체는 0~1 분율)
     print("ultrasonic:", go.ultrasonic())
 
     go.forward(20)                     # 전진 (연속 속도 제어)
@@ -88,7 +90,7 @@ finally:
 | 종류 | 메서드 | 특성 |
 |---|---|---|
 | **연속 속도 제어** | `move`, `move_direct`, `forward`, `backward`, `strafe`, `spin`, `stop`, `emergency_stop` | ✅ **정상 동작(신뢰)**. 속도를 주고 `stop()` 전까지 계속 이동 |
-| **큐/폐루프 명령** | `rotate`, `move_dist`, `arc_rad`, `arc_cent`, `increment_closed_loop` | ⚠️ **이 기체에서 완료 신호가 안 와 HANG**(~7일 타임아웃)될 수 있음 |
+| **큐/폐루프 명령** | `unsafe_rotate`, `unsafe_move_dist`, `unsafe_arc_rad`, `unsafe_arc_cent`, `unsafe_increment_closed_loop` (구명칭은 경고 별칭), `unsafe_move_pos` (신규 2026-07-04, 미검증 — 큐드 계열 확정으로 동일 위험 추정) | ⚠️ **이 기체에서 완료 신호가 안 와 HANG**(~7일 타임아웃)될 수 있음 |
 
 > 폐루프 명령들은 `isQueued=True, isWaitForFinish=True` 플래그(코드의 `_WAIT`)로 큐에 넣고 완료 콜백을 대기하므로, 콜백이 오지 않으면 HANG합니다. **정밀 이동이 필요하면 연속 `move()` + 센서 피드백으로 폐루프를 구성**하세요(→ 6절 `PreciseMover`, 7절 `WaypointNav`).
 >
@@ -97,9 +99,9 @@ finally:
 ### 2.3 좌표/단위 규약
 
 - **속도**: 정수 값(단위 미정규화). `PreciseMover`는 명령 속도 크기를 `max_speed=30`으로 **상한**, 목표 근처 감속 시 `min_speed=8`로 **하한** 강제합니다(강제 캡이며 권장 절대값이 아님). 부호는 유지됩니다.
-- **오도미터(`odometer()`)**: `{x, y, yaw}` — **월드 프레임** 누적 위치. mm 단위(매트 좌표 cm와 ×10 변환).
+- **오도미터(`odometer()`)**: `{x, y, yaw}` — **월드 프레임** 누적 위치. 명목 mm 단위(매트 좌표 cm와 ×10 변환). ⚠️ mm 스케일은 실측 의심(3~4배 과소집계 관측) — 자로 캘리브레이션 전엔 상대 진행량으로 취급.
 - **IMU 각도(`imu_angle()`)**: `{yaw, ...}` — **전원 기준 절대각**(`set_odometer`와 무관).
-- **방향 규약**: `x+` = 전진, `y+` = 좌측 횡이동(strafe), `r+` = 좌회전(반시계, CCW). ⚠️ **회전 부호는 실측 확인 필요**(정직성 고지 참조).
+- **방향 규약**: `x+` = 전진, `y+` = 좌측 횡이동(strafe), `r+` = 좌회전(반시계, CCW). ✅ **회전 부호 실기 확정(2026-07-03)**.
 - **초음파(`ultrasonic()`)**: `{front, back, left, right}` — cm 단위.
 - **yaw 출처 선택**: 제자리 회전량 측정은 `imu_angle()['yaw']`(상대 변화량이 안정적 → `PreciseMover.turn_degrees`), 매트 절대 헤딩은 `set_odometer`로 영점이 잡히는 `odometer()['yaw']`(→ `WaypointNav.pose_cm`)를 사용합니다. 두 yaw는 기준이 다르므로(IMU = 전원 기준, 오도미터 = `set_odometer` 기준) 절대값이 24° 이상 어긋날 수 있습니다. **혼용하지 마세요.**
 
@@ -129,8 +131,9 @@ go.set_running_mode(0)        # 의미 미확정 — 펌웨어 사양 확인 필
 
 | 메서드 | 설명 |
 |---|---|
-| `move(x=0, y=0, r=0)` | 속도 벡터 지정(전진/횡이동/회전 동시 가능). `SetMoveSpeed` |
-| `move_direct(direction, speed)` | 방향 지정 주행. `SetMoveSpeedDirect(dir=direction, speed=speed)`. `direction`(파이썬) → `dir`(RPC). `direction=0`을 전진으로 **추정**하나 값 매핑 펌웨어 미확정(실측 필요) |
+| `move(x=0, y=0, r=0)` | 속도 벡터 지정(전진/횡이동/회전 동시 가능). `SetMoveSpeed`. **각 성분 크기 ±30 클램프**(NaN/inf → 0: 미정의 속도는 주행 거부), 단위 미확정(8~30 실용) |
+| `drive_for(x=0, y=0, r=0, seconds=0.5)` | **데드맨 주행(권장)**: `move` 후 `seconds`(≤5s) 지나면 반드시 정지 — 크래시/Ctrl-C에도 finally가 정지 보장 |
+| `move_direct(direction, speed)` | 방향 지정 주행. `SetMoveSpeedDirect(dir=direction, speed=speed)`. `speed` 크기 ±30 클램프. `direction`(파이썬) → `dir`(RPC). `direction=0`을 전진으로 **추정**하나 값 매핑 펌웨어 미확정(실측 필요) |
 | `forward(speed)` | 전진 (= `move(x=speed)`) |
 | `backward(speed)` | 후진 (= `move(x=-speed)`) |
 | `strafe(speed)` | 좌(+)/우(-) 횡이동 (= `move(y=speed)`) |
@@ -164,16 +167,19 @@ else:
 
 `clearance_ok`는 `ultrasonic()`을 읽어 의도한 방향의 클리어런스를 검증합니다: `x>0`→front, `x<0`→back, `y!=0`→좌우 최소, `r!=0`→사방 최소(제자리 회전은 원을 그림).
 
-### 3.4 큐/폐루프 주행 (⚠️ HANG 위험 — 2.2 참고)
+### 3.4 큐/폐루프 주행 (⚠️ HANG 위험 — 2.2 참고, 정식 명칭은 `unsafe_` 접두사)
 
-| 메서드 | 설명 |
+행(HANG)이 실측된 큐 명령들의 **정식 명칭에는 `unsafe_` 접두사**가 붙습니다(자동완성/LLM이
+실수로 집지 못하도록). 구명칭(`rotate` 등)은 `UserWarning`을 내며 위임하는 폐기 예정 별칭입니다.
+
+| 메서드 (정식) | 설명 |
 |---|---|
-| `rotate(r, Vr)` | 각도 `r`만큼 회전(속도 `Vr`) |
-| `move_dist(x, y, Vx, Vy)` | 거리 지정 이동 |
-| `arc_rad(velocity, radius, angle, mode)` | 반경 기반 원호. `mode`=정수 방향/모드 플래그(예제는 `mode=0`, 의미 미확정) |
-| `arc_cent(velocity, x, y, angle, mode)` | 중심점 기반 원호. `mode`=정수 플래그(예제는 `mode=0`, 의미 미확정) |
-| `coord_closed_loop(is_enable, angle)` | 좌표 폐루프 (`SetCoordClosedLoop`). ⚠️ 다른 큐 명령과 달리 `_WAIT` 플래그 미전송 — 완료 대기(HANG) 동작 아님 |
-| `increment_closed_loop(x, y, angle)` | 증분 폐루프 |
+| `unsafe_rotate(r, Vr)` | 각도 `r`만큼 회전(속도 `Vr`) |
+| `unsafe_move_dist(x, y, Vx, Vy)` | 거리 지정 이동 |
+| `unsafe_arc_rad(velocity, radius, angle, mode)` | 반경 기반 원호. `mode`=정수 방향/모드 플래그(예제는 `mode=0`, 의미 미확정) |
+| `unsafe_arc_cent(velocity, x, y, angle, mode)` | 중심점 기반 원호. `mode`=정수 플래그(예제는 `mode=0`, 의미 미확정) |
+| `coord_closed_loop(is_enable, angle)` | 좌표 폐루프 (`SetCoordClosedLoop`). ⚠️ 다른 큐 명령과 달리 `_WAIT` 플래그 미전송 — 완료 대기(HANG) 동작이 아니라 `unsafe_` 아님 |
+| `unsafe_increment_closed_loop(x, y, angle)` | 증분 폐루프 |
 
 > ⚠️ **HANG 가능 — 실측/디버깅 전용, 반드시 `clearance_ok` 인터록과 함께.** 아래는 인자 순서/이름을 보여주는 호출 예입니다(인터록 통과 시 소량만, 끝에 `emergency_stop`).
 
@@ -181,11 +187,11 @@ else:
 ok, info = go.clearance_ok(r=1, threshold=25)
 if ok:
     try:
-        go.rotate(20, 30)                  # 회전 20deg, 속도 Vr=30
-        # go.move_dist(30, 0, 30, 0)        # x=30mm 이동, Vx=30
-        # go.increment_closed_loop(30, 0, 0)
-        # go.arc_rad(30, 50, 30, 0)         # velocity, radius, angle, mode
-        # go.arc_cent(30, 50, 0, 30, 0)     # velocity, x, y, angle, mode
+        go.unsafe_rotate(20, 30)             # 회전 20deg, 속도 Vr=30
+        # go.unsafe_move_dist(30, 0, 30, 0)   # x=30mm 이동, Vx=30
+        # go.unsafe_increment_closed_loop(30, 0, 0)
+        # go.unsafe_arc_rad(30, 50, 30, 0)    # velocity, radius, angle, mode
+        # go.unsafe_arc_cent(30, 50, 0, 30, 0)  # velocity, x, y, angle, mode
     finally:
         go.emergency_stop()
 ```
@@ -196,12 +202,13 @@ if ok:
 
 | 메서드 | 반환 | 설명 |
 |---|---|---|
-| `ultrasonic()` | `{front, back, left, right}` (cm) | 4방향 초음파 거리 (`GetUltrasoundData`) |
+| `ultrasonic()` | `{front, back, left, right}` (cm) **또는 `None`** | 4방향 초음파 거리 — **검증·정규화됨**: 40 이상은 40으로 클램프(하드웨어 상한, "40 = 40cm 이상"), 키 누락·비수치·0 이하·NaN 응답은 `None`(**모르면 멈춘다** — 주행 코드는 `None`을 정지 사유로 처리할 것) |
+| `ultrasonic_raw()` | 원시 응답 | 무검증 `GetUltrasoundData` (진단용) |
 | `odometer()` | `{x, y, yaw}` | 누적 위치(월드프레임, mm). RPC는 `GetSpeedometer`('Speedometer' 철자) |
 | `set_odometer(x, y, yaw)` | — | 오도미터 값 강제 세팅(좌표 영점). RPC `SetSpeedometer` |
-| `battery()` | `{powerVoltage, powerPercentage}` | 배터리 전압(V)+잔량(%). **링크 검증용으로 자주 사용** |
+| `battery()` | `{powerVoltage, powerPercentage}` | 배터리 전압(V)+잔량. **잔량 스케일은 펌웨어별 상이**(참조 기체 실측: 0~1 분율) — 표시할 땐 `pct*100 if pct<=1 else pct` 식으로 방어. **링크 검증용으로 자주 사용** |
 | `imu_angle()` | `{yaw, ...}` | IMU 각도(전원 기준 절대) |
-| `imu_speed()` | `{...}` | IMU 각속도 |
+| `imu_speed()` | `{ax, ay, az, gx, gy, gz}` | **원시 가속도(g)+자이로** (실측 확정 — RPC 이름과 달리 각속도 yaw dict가 아님) |
 
 ```python
 go.set_odometer(0, 0, 0)      # 현재 위치를 좌표 원점(0,0,yaw=0)으로 영점화
@@ -217,39 +224,45 @@ bat = go.battery()            # 링크 검증
 ```python
 go.rgb(number, effect, r, g, b, cycle, counts)   # 내부 RPC: SetLightRGB
 #   number : 1~5 정수, LEDChannel enum, 또는 "LED_1".."LED_4","LED_ALL" (문자열은 내부 매핑)
-#   effect : 1 = 점등(ON), 0 = 소등(OFF)
+#   effect : 0 = 소등(OFF), 1~3 = 점등(모드 enum — DobotLab 자체 퀵테스트는 3 전송)
 #   r,g,b  : 0~255
-#   cycle, counts : 점멸 주기/횟수(정수). 상시 점등/소등은 0 사용 (정확한 의미 펌웨어 미확정)
+#   cycle  : 점멸 주기 — **1 사용** (0이면 희미/무점등, 2026-07-03 실측)
+#   counts : 점멸 횟수 — **>=1 사용** (0이면 희미/무점등, 2026-07-03 실측)
 
-go.buzzer(index, tone, beat)   # 내부 RPC: SetBuzzerSound
-#   index/tone/beat : 정수(음 인덱스/음정/박자로 추정). 범위·의미 펌웨어 미확정(실측 필요)
+go.buzzer(index=5, tone=0, beat=0)   # 내부 RPC: SetBuzzerSound
+#   기본값 (5, 0, 0) = DobotLab 자체 비프와 동일 조합 — 깔끔한 '삑' 실측 확정(2026-07-03).
+#   다른 조합(예: index=1, tone=5, beat=1)은 덜그럭거리는 버즈 또는 무음 — 전체 범위 의미는 펌웨어 정의.
 ```
+
+> ✅ **하드웨어 검증(2026-07-03)**: `cycle=0, counts=0`은 effect와 무관하게 LED가 희미하거나 켜지지 않습니다.
+> **점등에는 반드시 `cycle=1, counts>=1`** 을 보내세요.
 
 **`LEDChannel`** (`from dobotkit import LEDChannel`): `LED_1=1, LED_2=2, LED_3=3, LED_4=4, LED_ALL=5`. `number` 인자는 `LEDChannel`/int/문자열을 모두 받습니다.
 
 ```python
 from dobotkit import LEDChannel
 
-go.rgb("LED_ALL", effect=1, r=255, g=0, b=0, cycle=0, counts=0)   # 전체 빨강 점등
-go.rgb(LEDChannel.LED_1, 1, 0, 255, 0, 0, 0)                      # LED_1 초록 (enum)
-go.rgb(1, 1, 0, 255, 0, 0, 1)                                     # LED_1 초록 (int)
-go.rgb("LED_ALL", 0, 0, 0, 0, 0, 1)                              # 전체 소등
-go.buzzer(index=1, tone=1, beat=1)                               # 부저 1회
+go.rgb("LED_ALL", effect=1, r=255, g=0, b=0, cycle=1, counts=1)   # 전체 빨강 점등
+go.rgb(LEDChannel.LED_1, 3, 0, 255, 0, 1, 1)                      # LED_1 초록 (enum, DobotLab 스타일 effect=3)
+go.rgb(1, 1, 0, 255, 0, 1, 1)                                     # LED_1 초록 (int)
+go.rgb("LED_ALL", 0, 0, 0, 0, 0, 0)                              # 전체 소등 (effect=0)
+go.buzzer()                                                       # 검증된 기본값 (5, 0, 0) — 깔끔한 삑
 ```
 
 ### 3.7 라인 트레이싱
 
 | 메서드 | 설명 |
 |---|---|
-| `auto_trace(on)` | 라인 트레이싱 ON/OFF (내부적으로 `SetTraceLoop` + `SetTraceAuto`) |
-| `trace_speed(speed)` | 트레이싱 속도 (`SetTraceSpeed`) |
-| `trace_pid(p, i, d)` | 라인 추종 PID 게인 (`SetTracePid`) |
-| `trace_angle()` | **CAR 카메라**(`GetCarCameraAngle`)가 인식한 라인 각도 `{angle, count}`. ARM 카메라가 비활성(405)이어도 영향 없음 |
+| `auto_trace(on)` | 라인 트레이싱 ON/OFF. 내부적으로 `SetTraceLoop` + `SetTraceAuto{isTrace: int, type: 0}` — **isTrace는 int 필수**(2026-07-02 실기 확정: bool을 보내면 펌웨어가 조용히 무시해 켜지지도 꺼지지도 않음). 래퍼가 처리하므로 호출자는 bool을 넘겨도 됨 |
+| `trace_speed(speed)` | 트레이싱 속도 (`SetTraceSpeed`). **공식 순찰값 20** |
+| `trace_pid(p, i, d)` | 라인 추종 PID 게인 (`SetTracePid`). **공식값 (0.5, 0, 0.5)** — 50 같은 값은 실측상 요동으로 라인 이탈 |
+| `trace_angle()` | **CAR 카메라**(`GetCarCameraAngle`)의 라인 각도, `{"angle": int, "count": int}`로 정규화(이상 응답 → `{"angle": 0, "count": 0}`). `count==0`=라인 없음. ARM 카메라가 비활성(405)이어도 영향 없음 |
+| `line_error(center)` | `angle - center` 또는 라인 없으면 `None` — 자체 P제어용 교육 프리미티브. `center`는 기체별 실측(참조 기체 ≈245) |
 
 ```python
-go.trace_speed(30)            # SetTraceSpeed(speed=30)
-go.trace_pid(50, 0, 10)       # P, I, D
-go.auto_trace(True)           # SetTraceLoop(enable=True) → SetTraceAuto(isTrace=True)
+go.trace_speed(20)            # 공식 순찰 속도
+go.trace_pid(0.5, 0, 0.5)     # 공식 PID (하드웨어 검증값)
+go.auto_trace(True)           # SetTraceLoop(enable=True) → SetTraceAuto(isTrace=1, type=0)
 print(go.trace_angle())       # {'angle': ..., 'count': ...}
 go.auto_trace(False)          # 추종 종료
 ```
@@ -271,6 +284,99 @@ objs = res.get("dl_obj", [])      # 검출 객체 리스트
 ```
 
 > 참고: 일부 기체는 ARM 카메라가 비활성입니다. 이 경우 `arm_camera_obj()`/`arm_camera_tag()`가 firmware error `{'code': 405, ...}`(또는 타임아웃)를 반환합니다. CAR 카메라가 정상인데 ARM만 405면 DobotLink↔GO 경로는 정상이고 ARM 모듈만 미응답입니다. 평상시에는 CAR 카메라(`car_camera_obj()`)를 우선 사용하세요.
+
+### 3.9 확장 API 49종 (2026-07-04 추가 — **hardware-unverified**)
+
+기존에 "미구현/미노출"로 표기됐던 DobotLink RPC 표면이 타입드 메서드로 추가되었습니다.
+와이어 시그니처는 공식 소스 3중 교차검증(DobotEDU 래퍼 + CHM + 플러그인 프로토콜 테이블)으로
+확정했으나, **아래 메서드 전부 실기 실행 이력이 없습니다(hardware-unverified, 2026-07-04)**.
+그룹별 권장 검증 절차와 안전한 검증 순서는 [VERIFICATION_NEEDED_ko.md](../VERIFICATION_NEEDED_ko.md) C절 참조.
+
+> **키워드 인자명 규약**: 확장 메서드의 파이썬 인자명은 **와이어 파라미터명 그대로**입니다
+> (camelCase — 예: `lineInfo`, `runModelIndex`, `isEnableCali`, `scopeErr`, `deviceName`;
+> Stop-Point는 대문자 `PointX`/`PointY`). snake_case로 키워드 호출하면 `TypeError`가 납니다.
+
+#### 3.9.1 진단·조회 (읽기 전용)
+
+| 메서드 | RPC | 반환 |
+|---|---|---|
+| `get_alarm_info()` | `GetAlarmInfo` | `{warning: [...]}` |
+| `clean_alarm_info()` | `CleanAlarmInfo` | result true (알람 소거) |
+| `running_state()` | `GetRunningState` | `{runningState:int}` **추정** — 공식 문서 페이지 뒤엉킴, 방어적 읽기 |
+| `stall_protection()` | `GetStallProtection` | `{isHappened:int}` — 모터 스톨 발생 여부 |
+| `off_ground()` | `GetOffGround` | `{isHappened:int}` — 들림 감지 |
+| `get_move_speed()` | `GetMoveSpeed` | `{x:float, y:float, r:float}` (x/y cm/s 0-100, r deg/s) |
+| `get_running_mode()` | `GetRunningMode` | `{runningMode:int}` 추정(0 NORMAL / 1 SAFE) — CHM 필드명 모순 있음, 방어적 읽기 |
+
+#### 3.9.2 트레이스 확장
+
+| 메서드 | RPC | 설명 |
+|---|---|---|
+| `firmware_trace_angle(**params)` | `GetTraceAngle` | ⚠️ **와이어 존재 미확인** — DobotLink 플러그인 메서드 테이블·공식 JS SDK 어디에도 없음(CHM엔 파일명만 존재). `**params` 패스스루로만 구현. 기존 `trace_angle()`(= `GetCarCameraAngle`, 카메라 라인각)과 **별개 RPC**이며 의미 대조가 필요합니다 |
+| `set_trace_line_info(lineInfo)` | `SetTraceLineInfo` | `lineInfo:int` 설정 — 값 의미 미확정 |
+
+#### 3.9.3 절대주행 (⚠️ 모션)
+
+| 메서드 | RPC | 설명 |
+|---|---|---|
+| `unsafe_move_pos(x, y, s)` | `SetMovePos` | 월드 좌표 (x, y) cm로 이동, 속도 `s`(0-100 cm/s). **큐드 액션 명령 확정**(isQueued/isWaitForFinish 기본 true) → 기존 `unsafe_` 5종과 동일한 **HANG 위험**(2.2절). 공식 DobotEDU는 사전에 오도미터 yaw 기준 `-yaw` 회전으로 방향 정렬 후 호출 |
+| `move_speed_time(time, x, y, r, isAck=False)` | `SetMoveSpeedTime` | `time`초 동안 속도 (x, y cm/s, r deg/s)로 주행 — **비큐드 확정**(공식 JS 조그가 사용, 큐 플래그 미전송·`isAck=false`)이라 `unsafe_` 아님. x/y/r 크기 **±30 클램프**, `time`은 **0~5초 클램프**(펌웨어 측 주행이라 스크립트가 죽어도 계속 달림 — `drive_for`와 동일 상한). 데드맨 주행 대체 후보이나 자동 정지 여부는 실측 필요 |
+| `set_origin_point(enable)` | `SetOriginPoint` | 원점 사용(1)/미사용(0) — 비큐드. 실효 의미(오도미터 원점?)는 미확정 |
+
+#### 3.9.4 카메라 확장 (Car/Arm)
+
+> 반환은 CHM 예시 기준이며 `count == 0`일 때 배열 키가 없을 수 있습니다 — 3.8절 `car_camera_obj`처럼 **방어적으로** 읽으세요. ARM 캠 계열은 기체에 따라 405 비활성(3.8절과 동일).
+
+| 메서드 | RPC | 반환/인자 |
+|---|---|---|
+| `car_camera_color()` | `GetCarCameraColor` | `{count:int(≤5), color_obj:[{x,y,w,h,id}]}` |
+| `car_camera_tag()` | `GetCarCameraTag` | `{count:int(≤5), aptag_obj:[{x,y,w,h,id,rot:float}]}` |
+| `get_car_camera_model()` / `set_car_camera_model(runModelIndex)` | `Get/SetCarCameraRunModel` | `{runModelIndex:int}` / `runModelIndex:int` |
+| `get_car_camera_calibration_mode()` / `set_car_camera_calibration_mode(isEnableCali)` | `Get/SetCarCameraCalibrationMode` | `{isEnableCali:int}` 추정 / `isEnableCali:int`(1 진입, 0 종료) |
+| `camera_calibration_data(april_list, device_list)` | `GetCameraCalibrationData` | Get이지만 **입력 필수**: 9점 `[[x,y],...]` JSON 문자열 2개(AprilTag 좌표/기계 좌표) → `{data:"max_x_err:0.44,..."}` 문자열. DobotLink이 내부적으로 fit_homography.exe 실행 |
+| `arm_camera_color()` | `GetArmCameraColor` | `{count, color_obj:[...]}` |
+| `arm_camera_angle()` | `GetArmCameraAngle` | `{angle:int}` |
+| `get_arm_camera_model()` / `set_arm_camera_model(runModelIndex)` | `Get/SetArmCameraRunModel` | Car와 동일 |
+| `get_arm_camera_calibration_mode()` / `set_arm_camera_calibration_mode(isEnableCali)` | `Get/SetArmCameraCalibrationMode` | Car와 동일 |
+
+#### 3.9.5 큐 제어
+
+| 메서드 | RPC | 설명 |
+|---|---|---|
+| `clean_cmd_queue()` | `CleanCmdQueue` | 명령 큐 비우기 |
+| `cmd_queue_start()` / `cmd_queue_stop()` | `SetCmdQueueStart/Stop` | 큐 실행 시작/정지 |
+| `cmd_queue_force_stop()` | `SetCmdQueueForcelyStop` | 강제 정지 — 공식 비상정지 시퀀스의 일부(JS) |
+| `queued_cmd_current_index()` | `GetQueuedCmdCurrentIndex` | `{queueCmdCurrentIndex:int}` — 반환 필드는 'Queued'가 아닌 'queue' 철자 주의. CHM 구명칭 `GetCmdQueueCurrentIndex`와 별개로 와이어명은 이쪽이 정식 |
+| `cmd_queue_available_space()` | `GetCmdQueueAvailableSpace` | `{space:int}` |
+
+#### 3.9.6 MagicBox / 상태 제어
+
+4.1절의 저수준 `client.call` 예시로만 가능했던 Stop-Point RPC가 타입드 메서드로 승격되었습니다.
+`MagicBox.*` 네임스페이스는 Stop-Point 계열뿐이고, 이름과 달리 `GetMagicBoxMode`/`GetMagicBoxNum`/`SetRunningState`는 `MagicianGO.*` 네임스페이스입니다(공식 JS 호출부로 확정).
+
+| 메서드 | RPC (네임스페이스) | 설명 |
+|---|---|---|
+| `magic_box_mode()` | `GetMagicBoxMode` (MagicianGO) | `{mode:int}` |
+| `magic_box_num()` | `GetMagicBoxNum` (MagicianGO) | `{num:int}` 추정 — CHM은 hex device 코드로 표기(모순), 방어적 읽기 |
+| `stop_point_state()` | `GetStopPointState` (**MagicBox**) | `{result:bool}` — 도착·정지 시 true |
+| `set_stop_point_param(scopeErr, stopErr)` | `SetStopPointParam` (**MagicBox**) | 진입범위(기본 40)/정지정밀도(기본 2) |
+| `set_stop_point_server(PointX, PointY)` | `SetStopPointServer` (**MagicBox**) | 정지점 좌표 — 파이썬 인자명도 와이어 그대로 대문자 `PointX`/`PointY`. ⚠️ **단위(cm/mm) 문서 미확정** — 작은 값으로 검증 |
+| `set_running_state(**params)` | `SetRunningState` (MagicianGO) | **미확정 패스스루** — `runningState:int` 추정이나 공식 호출부·문서 부재. 와이어 이름을 직접 넘길 것 |
+
+#### 3.9.7 출력 / 디바이스
+
+| 메서드 | RPC | 설명 |
+|---|---|---|
+| `set_light_prompt(index)` | `SetLightPrompt` | 상태 표시등: 0 없음 / 1 USB / 2 저전량 / 3 핸들 / 4 스크립트 |
+| `product_name()` | `GetProductName` | `{productName:string}` — 공식 JS는 `"MagicianGo"`일 때 유효 디바이스로 판정 |
+| `device_fw_software_version()` | `GetDeviceFwSoftwareVersion` | `{majorVersionNum, secondVersionNum, revisionVersionNum, previousVersionNum}` — 공식 JS가 `V{maj}.{sec}.{rev}.{prev}`로 조립(확정). CHM 예시 필드명은 구식 — 방어적 읽기 |
+| `device_fw_hardware_version()` | `GetDeviceFwHardwareVersion` | 동일 필드군 추정 — 방어적 읽기 |
+| `device_id()` | `GetDeviceID` | `{deviceID: [int, ...]}` |
+| `get_device_name()` / `set_device_name(deviceName)` | `Get/SetDeviceName` | `{deviceName:string}` / 이름 설정(예: `"MgoNO.1"`) |
+| `get_device_sn()` / `set_device_sn(deviceSN)` | `Get/SetDeviceSN` | `{deviceSN:string}` / ⚠️ SN 덮어쓰기는 원복 불가 위험 — 실사용 비권장 |
+| `device_time()` | `GetDeviceTime` | `{gSystick:int, passtime:"hh:mm:ss.z"}` |
+| `device_reboot()` | `DeviceReboot` | ⚠️ **호출 즉시 재부팅 — 이후 연결 끊김.** 재연결 필요. 반환값 정규화 없음(Any) |
+| `heartbeat()` | `HeartBeat` | keepalive — 공식 JS는 2000ms 타임아웃으로 호출, 3회 연속 실패 시 연결끊김 처리 |
 
 ---
 
@@ -304,7 +410,7 @@ with DobotLinkClient() as client:
 
 ### 4.1 실험적 RPC (`MagicBox.*`) — 좌표 정지점(Stop-Point)
 
-아래 RPC는 `MagicianGO.*`가 아닌 `MagicBox.*` 네임스페이스라 `MagicianGO` 래퍼에 없으며, 저수준 `client.call`로 직접 호출합니다.
+아래 RPC는 `MagicianGO.*`가 아닌 `MagicBox.*` 네임스페이스입니다. 2026-07-04부터 `MagicianGO` 래퍼에도 타입드 메서드(`stop_point_state`/`set_stop_point_param`/`set_stop_point_server`, hardware-unverified — 3.9.6절)가 있으며, 아래는 저수준 `client.call`로 직접 호출하는 경우의 와이어 형태입니다.
 
 | 메서드 | 설명 |
 |---|---|
@@ -325,29 +431,23 @@ client.call("MagicBox.SetStopPointServer", portName="COM5", PointX=5, PointY=0)
 ```python
 import time
 from dobotkit import MagicianGO
-from dobotkit.go.client import DobotLinkClient
 
-client = DobotLinkClient().connect()
-go = MagicianGO(client, port_name="COM5")
-try:
-    go.connect()                     # connect_robot() + battery() 검증
-    go.trace_speed(30)
-    go.trace_pid(50, 0, 10)          # P, I, D
+with MagicianGO.open(port_name="COM5") as go:   # 연결 + battery() 검증, 종료 시 자동 안전정지
+    go.trace_speed(20)               # 공식 순찰 속도
+    go.trace_pid(0.5, 0, 0.5)        # 공식 PID (50 같은 값은 요동으로 이탈 — 실측)
     go.auto_trace(True)              # 추종 시작
 
     start = time.monotonic()
     while time.monotonic() - start < 20:
         u = go.ultrasonic()
-        nearest_dir = min(u, key=u.get)
-        if u[nearest_dir] < 15:      # 15cm 미만 장애물 → 즉시 정지
+        # None = 판독 이상(모르면 멈춘다), 15cm 미만 = 장애물 → 즉시 정지
+        if u is None or min(u.values()) < 15:
             go.auto_trace(False)
             go.emergency_stop()
             break
         time.sleep(0.1)
-finally:
     go.auto_trace(False)
-    go.emergency_stop()
-    client.close()
+# with 종료가 비상정지→트레이스OFF→큐 강제정지(best-effort)→비상정지→소켓 종료까지 보장
 ```
 
 > 실제 바닥 라인이 있어야 추종합니다. 라인이 없으면 제자리 동작만 시도합니다.
@@ -470,11 +570,11 @@ except DobotConnectionError:
 
 1. **링크 검증**: `go.connect()`(= `connect_robot()` + `battery()`)로 실제 응답 확인. 실패 시 즉시 중단.
 2. **이동 전 클리어런스**: `clearance_ok()`로 진행 방향 거리 확인(≥15~20cm).
-3. **연속 명령만 신뢰**: 내장 폐루프(`move_dist`/`rotate`/`arc_*`/`increment_closed_loop`)는 HANG 가능 → 연속 `move()` + 피드백(`PreciseMover`/`WaypointNav`) 사용.
+3. **연속 명령만 신뢰**: 내장 폐루프(`unsafe_move_dist`/`unsafe_rotate`/`unsafe_arc_*`/`unsafe_increment_closed_loop`)는 HANG 가능 → 연속 `move()` + 피드백(`PreciseMover`/`WaypointNav`) 사용.
 4. **항상 정지로 종료**: 모든 제어를 `try/finally` 안에서 `go.emergency_stop()` + `client.close()`.
 5. **속도 상한 고정**: `max_speed=30` 이하, 짧은 거리/각도부터 검증.
 6. **모든 루프에 타임아웃**: 절대 무한 대기 금지(`PreciseMover`/`WaypointNav`는 `timeout_s` 내장).
-7. **회전 방향(yaw 부호)은 실측 확인**: `r+`=CCW 규약은 가정이며, 실제 하드웨어로 부호를 검증한 뒤 자율주행에 사용하세요.
+7. **회전 부호는 확정, 조향 부호는 실측 확인**: `r+`=CCW(좌회전)는 **실기 확정(2026-07-03)** 입니다. 아직 미확정인 것은 `line_error` 기반 P제어의 **조향 부호**(`move(x=v, r=-kp*err)`의 `-`가 기체별로 맞는지) — 라인 위에서 부호를 관찰·확인한 뒤 사용하세요.
 8. **AI 에이전트라면**: 동작 명령 전 `ultrasonic()`/`odometer()`로 상태를 먼저 읽고, 작은 펄스로 검증 후 확장하세요.
 
 ---
@@ -485,7 +585,7 @@ except DobotConnectionError:
 |---|---|
 | `cannot connect to DobotLink at ws://localhost:9090` (`DobotConnectionError`) | DobotLink.exe 미실행 → 실행 후 재시도 |
 | `connect()`/`connect_robot()`은 OK인데 `battery()` 타임아웃 | GO 전원 OFF 또는 무선 동글 분리 → 전원/링크 확인 |
-| `move_dist`/`rotate`가 영원히 멈춤(HANG) | 내장 폐루프 미지원 → 연속 `move()` + 피드백(6·7절) 사용 |
+| `unsafe_move_dist`/`unsafe_rotate`가 영원히 멈춤(HANG) | 내장 폐루프 미지원 → 연속 `move()` + 피드백(6·7절) 사용 |
 | 자율주행이 목표에서 빗나감 | `set_start` 시작 좌표/헤딩 보정 우선. 오도미터 드리프트는 `go_to` 재측정으로 보정 |
 | ARM 카메라 405 에러 | 해당 기체 ARM 카메라 비활성 → `car_camera_obj()` 사용 |
-| 회전이 반대로 돎 | yaw 부호 규약 미검증 — 실제 하드웨어로 `r+` 방향 확인 후 보정 |
+| 라인 P제어가 반대로 꺾음 | `line_error` 조향 부호가 기체별 상이(미검증) — `r+`=CCW 자체는 실기 확정(2026-07-03)이므로, 라인 오른쪽으로 틀었을 때 `angle > center`인지 관찰해 `-kp` 부호를 결정 |

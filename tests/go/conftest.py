@@ -176,10 +176,11 @@ class SimulatedGo:
         # Integration gains per sensor read.
         self.dist_per_tick = float(dist_per_tick)
         self.deg_per_tick = float(deg_per_tick)
-        # Ultrasonic readings (cm). Default: all clear.
-        self.clearances: Dict[str, float] = dict(
-            clearances or {"front": 100.0, "back": 100.0,
-                           "left": 100.0, "right": 100.0}
+        # Ultrasonic readings (cm). Default: all clear (40 = hardware ceiling).
+        # Set to ``None`` to simulate a malformed read (real API returns None).
+        self.clearances: Optional[Dict[str, float]] = dict(
+            clearances or {"front": 40.0, "back": 40.0,
+                           "left": 40.0, "right": 40.0}
         )
         # Recorded command/notify history for assertions.
         self.moves: List[Tuple[float, float, float]] = []
@@ -257,8 +258,13 @@ class SimulatedGo:
         self._advance_rotation()
         return {"yaw": self.imu_yaw}
 
-    def ultrasonic(self) -> Dict[str, float]:
-        return dict(self.clearances)
+    def ultrasonic(self) -> Optional[Dict[str, float]]:
+        # Mirrors the real MagicianGO contract: values clamp at the 40 cm
+        # hardware ceiling, and ``clearances = None`` simulates a malformed
+        # read (the real method returns None -> "unknown -> stop").
+        if self.clearances is None:
+            return None
+        return {k: min(float(v), 40.0) for k, v in self.clearances.items()}
 
     def set_odometer(self, x: float, y: float, yaw: float) -> None:
         self.x, self.y, self.yaw = float(x), float(y), float(yaw)
@@ -268,6 +274,8 @@ class SimulatedGo:
     def clearance_ok(self, x: float = 0.0, y: float = 0.0, r: float = 0.0,
                      threshold: float = 20.0) -> Tuple[bool, Any]:
         u = self.ultrasonic()
+        if u is None:
+            return False, "ultrasonic read invalid (unknown -> stop)"
         if x > 0 and u["front"] < threshold:
             return False, f"front={u['front']}<{threshold}"
         if x < 0 and u["back"] < threshold:

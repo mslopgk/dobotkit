@@ -45,8 +45,10 @@ with dobotkit.Magician(port="COM3") as arm:
 
 ## Installation
 
+> **Not yet published to PyPI** — install from a local checkout for now:
+
 ```bash
-pip install dobotkit            # once published to PyPI
+pip install -e path/to/dobotkit
 ```
 
 For development (editable install with the test/lint toolchain):
@@ -59,6 +61,9 @@ pip install -e ".[dev]"
 
 Requires **Python ≥ 3.9**. Runtime dependencies (`pyserial`, `websockets`) are
 installed automatically.
+
+한국어 문서: [빠른 시작 quickstart-ko](docs/quickstart-ko.md) ·
+[GO API 치트시트](docs/cheatsheet_go.md) (LLM 프롬프트/RAG 접지용 1장 요약)
 
 ---
 

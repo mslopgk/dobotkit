@@ -49,9 +49,38 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
+from dobotkit.exceptions import DobotError
 from dobotkit.go.geometry import bearing, clamp_speed, cm_to_mm, mm_to_cm, yaw_delta
 
-__all__ = ["PreciseMover", "WaypointNav"]
+__all__ = ["NavigationAborted", "PreciseMover", "WaypointNav"]
+
+
+class NavigationAborted(DobotError, RuntimeError):
+    """Raised (opt-in via ``raise_on_abort=True``) when a motion aborts/times out.
+
+    By default the motion primitives report failure only inside their result
+    dict (``aborted``/``timed_out``), which beginner code routinely forgets to
+    check. Passing ``raise_on_abort=True`` makes failure loud instead. The full
+    result dict is available as :attr:`result`.
+
+    Inherits :class:`~dobotkit.exceptions.DobotError` so downstream consumers
+    with ``except DobotError`` handlers (e.g. GUI controllers that must never
+    let device errors reach the UI thread) catch it without changes.
+    """
+
+    def __init__(self, result: Dict[str, Any]) -> None:
+        super().__init__(
+            f"motion aborted/timed out: {result.get('reason', 'timed out')} "
+            f"(target={result.get('target')}, achieved={result.get('achieved')})"
+        )
+        self.result = result
+
+
+def _finish(result: Dict[str, Any], raise_on_abort: bool) -> Dict[str, Any]:
+    """Return ``result``, or raise :class:`NavigationAborted` when opted in."""
+    if raise_on_abort and (result.get("aborted") or result.get("timed_out")):
+        raise NavigationAborted(result)
+    return result
 
 #: Control-loop period (seconds) between successive sensor read + move commands.
 LOOP_DT: float = 0.05
@@ -59,6 +88,17 @@ LOOP_DT: float = 0.05
 #: Final fraction of the move/turn over which speed is proportionally tapered
 #: down toward ``min_speed`` to limit overshoot near the target.
 SLOW_BAND: float = 0.30
+
+#: Stall guard (hardware incident 2026-07-03: the car pressed a wall for the
+#: full timeout): if the measured progress advances less than ``STALL_EPS``
+#: for ``STALL_WINDOW_S`` seconds while a velocity is commanded, the motion
+#: aborts as a suspected collision instead of pushing until timeout.
+STALL_WINDOW_S: float = 1.0
+STALL_EPS_MM: float = 3.0    # translation progress epsilon (mm)
+STALL_EPS_DEG: float = 2.0   # rotation progress epsilon (degrees)
+
+#: Period (seconds) between mid-move clearance re-checks during travel.
+RECHECK_S: float = 0.25
 
 # Anything exposing the MagicianGO method surface used here (move/forward/spin/
 # odometer/imu_angle/ultrasonic/clearance_ok/stop/emergency_stop/set_odometer).
@@ -127,6 +167,7 @@ class PreciseMover:
         axis: str = "x",
         threshold: float = 20,
         timeout_s: float = 8.0,
+        raise_on_abort: bool = False,
     ) -> Dict[str, Any]:
         """Travel ``|distance_mm|`` along ``axis`` then stop; the sign sets direction.
 
@@ -136,15 +177,28 @@ class PreciseMover:
         it to. Because the GO odometer is a world-frame, yaw-aware integral,
         travel is measured as the straight-line displacement magnitude
         ``hypot(dx, dy)`` from the start pose and the move stops once that
-        reaches ``|distance_mm|``. Speed tapers near the target; the intended
-        direction is clearance-checked first.
+        reaches ``|distance_mm|``. Speed tapers near the target. Safety, in
+        layers (the pre-check alone proved insufficient on hardware): the
+        intended direction is clearance-checked **before** moving, re-checked
+        every :data:`RECHECK_S` seconds **during** the move, and a stall guard
+        aborts if the odometer stops advancing for :data:`STALL_WINDOW_S`
+        seconds while a velocity is commanded (suspected collision).
+
+        .. note:: **Unit boundary.** This primitive works in **millimetres**
+            (odometer units); :class:`WaypointNav` works in **centimetres**
+            (mat/SDK units) and converts only at its own boundary. Speed units
+            are firmware-defined and unconfirmed — 8..30 is the practical range.
 
         Args:
-            distance_mm: Signed target distance in millimetres.
-            speed: Base speed magnitude (capped into ``[min_speed, max_speed]``).
+            distance_mm: Signed target distance in **millimetres**.
+            speed: Base speed magnitude (capped into ``[min_speed, max_speed]``;
+                units unconfirmed, 8..30 practical).
             axis: ``"x"`` (forward/back) or ``"y"`` (strafe left/right).
             threshold: Minimum required clearance (cm) ahead before moving.
             timeout_s: Absolute wall-clock safety timeout (seconds).
+            raise_on_abort: When ``True``, raise :class:`NavigationAborted`
+                instead of returning an ``aborted``/``timed_out`` result dict —
+                use this to make failures loud in beginner/teaching code.
 
         Returns:
             ``{target, achieved, error, axis, timed_out, aborted}``. When the
@@ -172,14 +226,21 @@ class PreciseMover:
         if not ok:
             result["aborted"] = True
             result["reason"] = f"clearance blocked: {info}"
-            return result
+            return _finish(result, raise_on_abort)
 
         try:
             start = self.go.odometer()
-            deadline = time.monotonic() + timeout_s
+            now = time.monotonic()
+            deadline = now + timeout_s
             traveled = 0.0
+            # Stall guard state (hardware incident 2026-07-03: the car pressed
+            # into a wall for the full timeout because nothing watched progress).
+            best_progress = 0.0
+            progress_t = now
+            recheck_t = now
             while True:
-                if time.monotonic() >= deadline:
+                now = time.monotonic()
+                if now >= deadline:
                     result["timed_out"] = True
                     break
                 odo = self.go.odometer()
@@ -192,6 +253,27 @@ class PreciseMover:
                 remaining = abs(distance_mm) - abs(traveled)
                 if remaining <= 0:
                     break
+                # Stall guard: wheels commanded but odometer frozen -> the car
+                # is most likely pressing an obstacle (or wedged). Stop pushing.
+                if abs(traveled) > best_progress + STALL_EPS_MM:
+                    best_progress = abs(traveled)
+                    progress_t = now
+                elif now - progress_t >= STALL_WINDOW_S:
+                    result["aborted"] = True
+                    result["reason"] = (
+                        f"stall: no odometer progress for {STALL_WINDOW_S:.1f}s "
+                        f"while driving (collision?)"
+                    )
+                    break
+                # Mid-move clearance recheck: the pre-check alone cannot see an
+                # obstacle entering the path (or sensor offset error) once moving.
+                if now - recheck_t >= RECHECK_S:
+                    recheck_t = now
+                    ok, info = self.go.clearance_ok(x=cx, y=cy, threshold=threshold)
+                    if not ok:
+                        result["aborted"] = True
+                        result["reason"] = f"clearance lost mid-move: {info}"
+                        break
                 v = self._profiled_speed(remaining, distance_mm, base) * direction
                 if axis == "x":
                     self.go.move(x=v)
@@ -202,7 +284,7 @@ class PreciseMover:
             result["error"] = float(distance_mm) - float(traveled)
         finally:
             self._settle_stop()
-        return result
+        return _finish(result, raise_on_abort)
 
     # ---- in-place rotation -------------------------------------------------
 
@@ -212,6 +294,7 @@ class PreciseMover:
         speed: float = 25,
         threshold: float = 20,
         timeout_s: float = 8.0,
+        raise_on_abort: bool = False,
     ) -> Dict[str, Any]:
         """Turn in place by ``deg`` then stop; the sign sets direction (``r+`` = CCW).
 
@@ -223,9 +306,12 @@ class PreciseMover:
 
         Args:
             deg: Signed target turn in degrees (``+`` = CCW / left).
-            speed: Base angular speed magnitude (capped into ``[min, max]``).
+            speed: Base angular speed magnitude (capped into ``[min, max]``;
+                units unconfirmed, 8..30 practical).
             threshold: Minimum required clearance (cm) all around before turning.
             timeout_s: Absolute wall-clock safety timeout (seconds).
+            raise_on_abort: When ``True``, raise :class:`NavigationAborted`
+                instead of returning an ``aborted``/``timed_out`` result dict.
 
         Returns:
             ``{target, achieved, error, timed_out, aborted}``. When the clearance
@@ -246,14 +332,18 @@ class PreciseMover:
         if not ok:
             result["aborted"] = True
             result["reason"] = f"clearance blocked: {info}"
-            return result
+            return _finish(result, raise_on_abort)
 
         try:
             start_yaw = self.go.imu_angle()["yaw"]
-            deadline = time.monotonic() + timeout_s
+            now = time.monotonic()
+            deadline = now + timeout_s
             turned = 0.0
+            best_progress = 0.0
+            progress_t = now
             while True:
-                if time.monotonic() >= deadline:
+                now = time.monotonic()
+                if now >= deadline:
                     result["timed_out"] = True
                     break
                 cur_yaw = self.go.imu_angle()["yaw"]
@@ -262,6 +352,18 @@ class PreciseMover:
                 remaining = abs(deg) - abs(turned)
                 if remaining <= 0:
                     break
+                # Stall guard: commanded to spin but the IMU is frozen -> the
+                # chassis is most likely wedged. Stop pushing.
+                if abs(turned) > best_progress + STALL_EPS_DEG:
+                    best_progress = abs(turned)
+                    progress_t = now
+                elif now - progress_t >= STALL_WINDOW_S:
+                    result["aborted"] = True
+                    result["reason"] = (
+                        f"stall: no IMU progress for {STALL_WINDOW_S:.1f}s "
+                        f"while turning (wedged?)"
+                    )
+                    break
                 v = self._profiled_speed(remaining, deg, base) * direction
                 self.go.move(r=v)
                 time.sleep(LOOP_DT)
@@ -269,7 +371,7 @@ class PreciseMover:
             result["error"] = float(deg) - float(turned)
         finally:
             self._settle_stop()
-        return result
+        return _finish(result, raise_on_abort)
 
 
 class WaypointNav:
@@ -301,7 +403,8 @@ class WaypointNav:
     def __init__(self, go: GoLike, mover: Optional[PreciseMover] = None) -> None:
         self.go = go
         self.mover = mover if mover is not None else PreciseMover(go)
-        self._heading = 0.0  # last recorded mat heading (deg)
+        self._heading = 0.0   # last recorded mat heading (deg)
+        self._started = False  # set_start() called? go_to() refuses to run before it
 
     # ---- start pose: zero the odometer to mat coordinates ------------------
 
@@ -318,6 +421,7 @@ class WaypointNav:
         """
         self.go.set_odometer(cm_to_mm(x_cm), cm_to_mm(y_cm), float(heading_deg))
         self._heading = float(heading_deg)
+        self._started = True
         return {
             "x_cm": float(x_cm),
             "y_cm": float(y_cm),
@@ -385,6 +489,7 @@ class WaypointNav:
         threshold: float = 20,
         turn_timeout_s: float = 8.0,
         move_timeout_s: float = 8.0,
+        raise_on_abort: bool = False,
     ) -> Dict[str, Any]:
         """Drive to the absolute mat coordinate ``(x_cm, y_cm)``.
 
@@ -394,11 +499,29 @@ class WaypointNav:
         or after ``max_iters`` (re-measuring each leg corrects odometer drift and
         turn error).
 
+        Requires :meth:`set_start` first — without it the odometer is in an
+        arbitrary frame and the car would drive somewhere unrelated to the mat.
+
+        Args:
+            raise_on_abort: When ``True``, raise :class:`NavigationAborted` if
+                the target is not reached (clearance-blocked, timed out, or out
+                of iterations) instead of returning ``arrived=False``.
+
         Returns:
             ``{start, target, final, residual_cm, iters, legs, arrived}`` where
             ``legs`` is a per-iteration list of
             ``{iter, bearing, dist_cm, turn, move}``.
+
+        Raises:
+            RuntimeError: if called before :meth:`set_start`.
+            NavigationAborted: if ``raise_on_abort`` and the target was not reached.
         """
+        if not self._started:
+            raise RuntimeError(
+                "WaypointNav.go_to() called before set_start(): the odometer is "
+                "not zeroed to the mat frame, so navigation would be meaningless. "
+                "set_start(x_cm, y_cm, heading_deg) 로 매트 좌표를 영점화한 뒤 사용하세요."
+            )
         start = self.pose_cm()
         target = {"x_cm": float(x_cm), "y_cm": float(y_cm)}
         legs = []
@@ -447,7 +570,7 @@ class WaypointNav:
         ) ** 0.5
         if residual <= arrive_tol_cm:
             arrived = True
-        return {
+        out = {
             "start": start,
             "target": target,
             "final": final,
@@ -456,3 +579,12 @@ class WaypointNav:
             "legs": legs,
             "arrived": arrived,
         }
+        if raise_on_abort and not arrived:
+            out["aborted"] = True
+            out.setdefault(
+                "reason",
+                f"target not reached (residual {residual:.1f} cm > "
+                f"tolerance {arrive_tol_cm} cm after {iters} iteration(s))",
+            )
+            raise NavigationAborted(out)
+        return out

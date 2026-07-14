@@ -142,12 +142,15 @@ def main(port: str = "COM5") -> None:
 
             # While moving, re-check the current direction every loop and auto-stop
             # if it has become blocked (continuous velocity keeps going otherwise).
-            if isinstance(u, dict) and moving != (0, 0, 0):
-                why = blocked(moving, u, THRESHOLD)
+            # ultrasonic() returns None on a malformed/failed read — unknown
+            # means STOP, exactly like a detected obstacle.
+            if moving != (0, 0, 0):
+                why = blocked(moving, u, THRESHOLD) if isinstance(u, dict) \
+                    else "ultrasonic read invalid (unknown -> stop)"
                 if why:
                     go.emergency_stop()
                     moving = (0, 0, 0)
-                    print(f"\n[auto-stop] obstacle ahead in travel direction: {why}")
+                    print(f"\n[auto-stop] {why}")
 
             if msvcrt.kbhit():
                 key = msvcrt.getch().decode("utf-8", "ignore").upper()

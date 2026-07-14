@@ -44,10 +44,10 @@ from dobotkit.go.client import DobotLinkClient
 DEFAULT_PORT = "COM5"  # COM port the GO is connected on
 DEFAULT_DURATION = 20.0  # default run time (seconds)
 
-TRACE_SPEED = 30  # conservative tracing speed
-TRACE_P = 50  # PID proportional gain
-TRACE_I = 0  # PID integral gain
-TRACE_D = 10  # PID derivative gain
+TRACE_SPEED = 20  # official patrol speed (matches DobotLab's patrol button)
+TRACE_P = 0.5  # PID proportional gain (official demo value; hardware-measured:
+TRACE_I = 0    # values like 50 are ~100x too hot -> violent oscillation and
+TRACE_D = 0.5  # the car flies off the line)
 
 OBSTACLE_THRESHOLD_CM = 15  # below this (cm) -> obstacle -> stop immediately
 LOOP_DT = 0.1  # control-loop period (seconds)
@@ -118,6 +118,15 @@ def main() -> None:
         while time.monotonic() - start < duration:
             u = go.ultrasonic()
             angle_info = go.trace_angle()
+
+            # ultrasonic() returns None on a malformed/failed read — unknown
+            # means STOP, exactly like a detected obstacle.
+            if u is None:
+                go.auto_trace(False)
+                go.emergency_stop()
+                print("\n[safe-stop] ultrasonic read invalid (unknown -> stop) "
+                      "-> tracing stopped.")
+                break
 
             elapsed = time.monotonic() - start
             line = (

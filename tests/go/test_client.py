@@ -201,3 +201,39 @@ def test_context_manager_closes_on_exception():
         with DobotLinkClient(_ws_factory=lambda *a, **k: ws):
             raise RuntimeError("boom")
     assert ws.closed is True
+
+
+# ---- total-deadline semantics ------------------------------------------------
+
+def test_call_deadline_not_extended_by_unrelated_frames(monkeypatch):
+    """A stream of unrelated notifications must not extend the wait forever.
+
+    ``timeout`` is a *total* deadline for the whole call: even if DobotLink
+    keeps the socket chatty with frames whose ``id`` never matches, ``call``
+    must still raise ``DobotTimeoutError`` once the deadline passes.
+    """
+    from dobotkit.go import client as client_mod
+
+    class ChattyWebSocket(FakeWebSocket):
+        """recv() always has an unrelated notification ready — never times out."""
+
+        def recv(self, timeout=None):  # noqa: ARG002 - mirror the real signature
+            clock[0] += 0.4  # each read costs simulated wall-clock time
+            return json.dumps({"jsonrpc": "2.0", "method": "dobotlink.note",
+                               "params": {}})
+
+    clock = [0.0]
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock[0])
+    ws = ChattyWebSocket()
+    client = DobotLinkClient(timeout=1.0, _ws_factory=lambda *a, **k: ws).connect()
+    with pytest.raises(DobotTimeoutError, match="timed out after 1.0s"):
+        client.call("MagicianGO.GetBatteryVoltage", portName="COM5")
+    # The chatty socket served ~3 frames (0.4s each) before the 1.0s deadline.
+    assert clock[0] >= 1.0
+
+
+def test_call_recv_timeout_still_raises(monkeypatch):
+    # The per-read TimeoutError path must still surface as DobotTimeoutError.
+    client, _ = make_client(responses=None, timeout=0.01)
+    with pytest.raises(DobotTimeoutError):
+        client.call("MagicianGO.GetBatteryVoltage", portName="COM5")

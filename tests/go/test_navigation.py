@@ -364,3 +364,132 @@ def test_go_to_aborts_when_path_blocked(monkeypatch):
     assert len(res["legs"]) == 1
     assert res["legs"][0]["move"]["aborted"] is True
     assert "clearance blocked" in res["legs"][0]["move"]["reason"]
+
+
+# ---- set_start guard / raise_on_abort ----------------------------------------
+
+def test_go_to_before_set_start_raises():
+    import pytest
+
+    from dobotkit.go.navigation import WaypointNav
+
+    nav = WaypointNav(SimulatedGo())
+    with pytest.raises(RuntimeError, match="set_start"):
+        nav.go_to(10, 0)
+
+
+def test_goto_distance_raise_on_abort_on_clearance_block():
+    import pytest
+
+    from dobotkit.go.navigation import NavigationAborted, PreciseMover
+
+    go = SimulatedGo(clearances={"front": 5.0, "back": 100.0,
+                                 "left": 100.0, "right": 100.0})
+    mover = PreciseMover(go)
+    # Default behaviour is unchanged: a quiet result dict.
+    res = mover.goto_distance(100, speed=20, threshold=20)
+    assert res["aborted"] is True
+    # Opt-in behaviour: loud failure carrying the same result dict.
+    with pytest.raises(NavigationAborted) as excinfo:
+        mover.goto_distance(100, speed=20, threshold=20, raise_on_abort=True)
+    assert excinfo.value.result["aborted"] is True
+    assert "clearance" in excinfo.value.result["reason"]
+
+
+def test_turn_degrees_raise_on_abort_on_clearance_block():
+    import pytest
+
+    from dobotkit.go.navigation import NavigationAborted, PreciseMover
+
+    go = SimulatedGo(clearances={"front": 5.0, "back": 5.0,
+                                 "left": 5.0, "right": 5.0})
+    with pytest.raises(NavigationAborted):
+        PreciseMover(go).turn_degrees(90, speed=20, threshold=20,
+                                      raise_on_abort=True)
+
+
+def test_go_to_raise_on_abort_when_blocked():
+    import pytest
+
+    from dobotkit.go.navigation import NavigationAborted, WaypointNav
+
+    go = SimulatedGo(clearances={"front": 5.0, "back": 100.0,
+                                 "left": 100.0, "right": 100.0})
+    nav = WaypointNav(go)
+    nav.set_start(0, 0, heading_deg=0.0)
+    # Default: quiet arrived=False.
+    res = nav.go_to(30, 0, speed=20, arrive_tol_cm=2.0, max_iters=2)
+    assert res["arrived"] is False
+    # Opt-in: loud NavigationAborted with the full result attached.
+    with pytest.raises(NavigationAborted) as excinfo:
+        nav.go_to(30, 0, speed=20, arrive_tol_cm=2.0, max_iters=2,
+                  raise_on_abort=True)
+    assert excinfo.value.result["arrived"] is False
+    assert excinfo.value.result["aborted"] is True
+
+
+# ---- stall guard / mid-move clearance recheck (hardware incident 2026-07-03) --
+
+def _advancing_clock(monkeypatch, clock, step):
+    """sleep() advances the fake clock by ``step`` seconds per loop iteration."""
+    monkeypatch.setattr(navigation.time, "sleep", lambda *_a, **_k: clock.advance(step))
+
+
+def test_goto_distance_stall_aborts_before_timeout(monkeypatch):
+    # The car pressed into a wall: wheels commanded, odometer frozen. The stall
+    # guard must abort within ~STALL_WINDOW_S instead of pushing until timeout.
+    clock = FakeClock()
+    _patch_time(monkeypatch, clock)
+    _advancing_clock(monkeypatch, clock, 0.3)
+    go = SimulatedGo(dist_per_tick=0.0)   # never advances = stalled against wall
+    mover = PreciseMover(go)
+
+    res = mover.goto_distance(200, speed=15, axis="x", timeout_s=10.0)
+
+    assert res["aborted"] is True
+    assert "stall" in res["reason"]
+    assert res["timed_out"] is False       # aborted long before the 10 s timeout
+    assert go.emergency_stops >= 1         # and the car was stopped
+
+
+def test_turn_degrees_stall_aborts(monkeypatch):
+    clock = FakeClock()
+    _patch_time(monkeypatch, clock)
+    _advancing_clock(monkeypatch, clock, 0.3)
+    go = SimulatedGo(deg_per_tick=0.0)     # wedged: IMU never advances
+    mover = PreciseMover(go)
+
+    res = mover.turn_degrees(90, speed=15, timeout_s=10.0)
+
+    assert res["aborted"] is True
+    assert "stall" in res["reason"]
+    assert go.emergency_stops >= 1
+
+
+def test_goto_distance_aborts_when_clearance_lost_mid_move(monkeypatch):
+    # An obstacle appearing (or a sensor-offset error) after the pre-check must
+    # stop the move at the next mid-move recheck, not at the destination.
+    clock = FakeClock()
+    _patch_time(monkeypatch, clock)
+    _advancing_clock(monkeypatch, clock, 0.3)
+
+    class BlockedMidwayGo(SimulatedGo):
+        def __init__(self):
+            super().__init__(dist_per_tick=1.0)
+            self._reads = 0
+
+        def ultrasonic(self):
+            self._reads += 1
+            if self._reads > 2:            # clear at pre-check, blocked after
+                return {"front": 5.0, "back": 40.0, "left": 40.0, "right": 40.0}
+            return super().ultrasonic()
+
+    go = BlockedMidwayGo()
+    mover = PreciseMover(go)
+
+    res = mover.goto_distance(500, speed=15, axis="x", timeout_s=10.0)
+
+    assert res["aborted"] is True
+    assert "clearance lost mid-move" in res["reason"]
+    assert abs(res["achieved"]) < 500      # stopped well short of the target
+    assert go.emergency_stops >= 1

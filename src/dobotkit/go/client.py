@@ -24,6 +24,7 @@ opening a real connection; in production it defaults to
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable, Dict, Optional
 
 from dobotkit.exceptions import DobotConnectionError, DobotLinkError, DobotTimeoutError
@@ -91,7 +92,13 @@ class DobotLinkClient:
         return self
 
     def close(self) -> None:
-        """Close the WebSocket if open. Safe to call more than once."""
+        """Close the WebSocket if open. Safe to call more than once.
+
+        Note: this only closes the *socket* — it does **not** stop the car. A
+        GO driving at its last commanded velocity keeps driving. Safety
+        teardown (line-trace OFF + emergency stop) is the job of the
+        ``MagicianGO`` context manager; prefer ``with MagicianGO.open(...)``.
+        """
         if self._ws is not None:
             ws, self._ws = self._ws, None
             ws.close()
@@ -119,7 +126,9 @@ class DobotLinkClient:
             DobotLinkError: if not connected, or if the response is a JSON-RPC
                 error.
             DobotTimeoutError: if no matching response arrives within ``timeout``
-                (GO power/wireless link may be down).
+                (GO power/wireless link may be down). ``timeout`` is a **total
+                deadline** for the whole call, not a per-read budget — a stream
+                of unrelated notifications cannot extend the wait indefinitely.
         """
         ws = self._require_connection()
         self._id += 1
@@ -132,9 +141,16 @@ class DobotLinkClient:
         }
         ws.send(json.dumps(payload))
 
+        deadline = time.monotonic() + self._timeout
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DobotTimeoutError(
+                    f"timed out after {self._timeout}s waiting for "
+                    f"'{payload['method']}'. GO power/wireless link may be down."
+                )
             try:
-                raw = ws.recv(timeout=self._timeout)
+                raw = ws.recv(timeout=remaining)
             except TimeoutError as exc:
                 raise DobotTimeoutError(
                     f"timed out after {self._timeout}s waiting for "
