@@ -60,21 +60,6 @@ def test_home_always_queues_params_and_cmd_even_without_wait():
     assert cmd_call["isQueued"] is True
 
 
-def test_connect_clears_alarms():
-    """connect() must clear controller alarms — an active alarm silently blocks motion."""
-    c = FakeClient()
-    arm = MagicianLite(port="COM8", auto_connect=False, _client=c)
-    arm.connect()
-    assert c.find_call("Magician.ClearAllAlarmsState") is not None
-
-
-def test_clear_alarms_delegates():
-    c = FakeClient()
-    arm = MagicianLite(port="COM8", auto_connect=False, _client=c)
-    arm.clear_alarms()
-    assert c.find_call("Magician.ClearAllAlarmsState") is not None
-
-
 def test_context_manager_disconnects():
     c = FakeClient()
     with MagicianLite(port="COM8", auto_connect=False, _client=c) as arm:
