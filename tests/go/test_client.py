@@ -1,4 +1,4 @@
-"""Tests for ``dobotkit.go.client.DobotLinkClient``.
+"""Tests for ``dobotkit.link.DobotLinkClient``.
 
 The client is a thin, synchronous JSON-RPC wrapper over a ``websockets``
 connection. These tests drive it entirely through the in-memory
@@ -22,7 +22,7 @@ import json
 import pytest
 
 from dobotkit.exceptions import DobotConnectionError, DobotLinkError, DobotTimeoutError
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 
 from .conftest import FakeWebSocket
 
@@ -212,7 +212,7 @@ def test_call_deadline_not_extended_by_unrelated_frames(monkeypatch):
     keeps the socket chatty with frames whose ``id`` never matches, ``call``
     must still raise ``DobotTimeoutError`` once the deadline passes.
     """
-    from dobotkit.go import client as client_mod
+    from dobotkit import link as link_mod
 
     class ChattyWebSocket(FakeWebSocket):
         """recv() always has an unrelated notification ready — never times out."""
@@ -223,7 +223,7 @@ def test_call_deadline_not_extended_by_unrelated_frames(monkeypatch):
                                "params": {}})
 
     clock = [0.0]
-    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(link_mod.time, "monotonic", lambda: clock[0])
     ws = ChattyWebSocket()
     client = DobotLinkClient(timeout=1.0, _ws_factory=lambda *a, **k: ws).connect()
     with pytest.raises(DobotTimeoutError, match="timed out after 1.0s"):

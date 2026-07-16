@@ -6,7 +6,8 @@ via the ``websockets`` library; nothing here touches the arm's serial stack.
 
 Exported names:
 
-* :class:`~dobotkit.go.client.DobotLinkClient` -- the WebSocket JSON-RPC client.
+* :class:`~dobotkit.link.DobotLinkClient` -- the WebSocket JSON-RPC client
+  (shared with the arm stack).
 * :class:`~dobotkit.go.magiciango.MagicianGO` -- the high-level GO wrapper
   (continuous drive, sensors, camera, LED/buzzer, line-trace).
 * :class:`~dobotkit.go.navigation.PreciseMover` /
@@ -23,14 +24,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only, not imported at runtime
-    from .client import DobotLinkClient
+    from dobotkit.link import DobotLinkClient
     from .magiciango import MagicianGO
     from .navigation import NavigationAborted, PreciseMover, WaypointNav
 
 # Public name -> (submodule, attribute). Deferred to first access so importing
 # this subpackage never eagerly imports ``websockets``.
 _LAZY = {
-    "DobotLinkClient": ("dobotkit.go.client", "DobotLinkClient"),
+    "DobotLinkClient": ("dobotkit.link", "DobotLinkClient"),
     "MagicianGO": ("dobotkit.go.magiciango", "MagicianGO"),
     "NavigationAborted": ("dobotkit.go.navigation", "NavigationAborted"),
     "PreciseMover": ("dobotkit.go.navigation", "PreciseMover"),

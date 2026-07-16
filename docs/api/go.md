@@ -5,7 +5,7 @@
 
 - **대상 하드웨어**: Dobot Magician GO (전방향 주행 카 + 초음파/IMU/오도미터, 카메라, RGB LED, 부저, 라인트레이싱)
 - **라이브러리**: `dobotkit` — **순수 파이썬**(`websockets`만), DLL 불필요, 크로스플랫폼. (PyPI 미게시 — `pip install -e <로컬 경로>`)
-- **임포트**: `from dobotkit import MagicianGO` + `from dobotkit.go.client import DobotLinkClient`.
+- **임포트**: `from dobotkit import MagicianGO` + `from dobotkit.link import DobotLinkClient`.
 - **연결 구조**:
 
 ```
@@ -42,7 +42,7 @@ GO는 직접 구동하지 않습니다. 파이썬은 **DobotLink** 데스크톱 
 
 ```python
 from dobotkit import MagicianGO, DobotLinkError
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 
 client = DobotLinkClient(host="localhost", port=9090, timeout=10.0).connect()
 go = MagicianGO(client, port_name="COM5")
@@ -70,7 +70,7 @@ finally:
 
 > ⚠️ **`connect_robot()`의 핸드셰이크는 거짓 성공을 보고할 수 있습니다.** 연결 직후 반드시 `go.battery()` 같은 읽기 호출로 실제 응답을 확인하세요(`go.connect()`가 이를 대신해 줍니다). 타임아웃 나면 GO 전원/무선 링크가 끊긴 것이니 중단합니다.
 
-`DobotLinkClient`/`MagicianGO`/`DobotLinkError`는 모두 `dobotkit`에서 직접 임포트할 수 있습니다(클라이언트는 `dobotkit.go.client`에 있습니다). `import dobotkit`만으로는 `websockets`가 로드되지 않으며, 첫 연결 시점에 지연 임포트됩니다.
+`DobotLinkClient`/`MagicianGO`/`DobotLinkError`는 모두 `dobotkit`에서 직접 임포트할 수 있습니다(클라이언트는 `dobotkit.link`에 있습니다). `import dobotkit`만으로는 `websockets`가 로드되지 않으며, 첫 연결 시점에 지연 임포트됩니다.
 
 ---
 
@@ -382,10 +382,10 @@ objs = res.get("dl_obj", [])      # 검출 객체 리스트
 
 ## 4. `DobotLinkClient` API
 
-저수준 JSON-RPC 클라이언트. `from dobotkit.go.client import DobotLinkClient`.
+저수준 JSON-RPC 클라이언트. `from dobotkit.link import DobotLinkClient`.
 
 ```python
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 
 client = DobotLinkClient(host="localhost", port=9090, timeout=10.0)
 client.connect()                       # 연결 (실패 시 DobotConnectionError)

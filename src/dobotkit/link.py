@@ -1,10 +1,11 @@
-"""Synchronous JSON-RPC client for DobotLink (``ws://localhost:9090``).
+"""Shared DobotLink client (arm + GO): synchronous JSON-RPC over ``ws://localhost:9090``.
 
-The Magician GO is not driven directly; Python talks to the **DobotLink**
-desktop service over a WebSocket using JSON-RPC 2.0, and DobotLink relays
-commands to the car over its COM port / wireless dongle::
+Neither the Magician Lite arm nor the Magician GO is driven directly; Python
+talks to the **DobotLink** desktop service over a WebSocket using JSON-RPC 2.0,
+and DobotLink relays commands to the device over its COM port / wireless
+dongle::
 
-    Python  --(WebSocket JSON-RPC)-->  DobotLink.exe  --(COM/wireless)-->  GO
+    Python  --(WebSocket JSON-RPC)-->  DobotLink.exe  --(COM/wireless)-->  arm / GO
 
 This client is a thin, blocking wrapper over the ``websockets`` *sync* API: one
 request, then a read loop that returns the response whose ``id`` matches. It
@@ -13,9 +14,10 @@ depends only on ``websockets`` -- never on Dobot's DobotEDU/DobotRPC packages.
 Method prefixing: only the ``dobotlink.`` namespace is added automatically.
 A bare ``MagicianGO.GetBatteryVoltage`` becomes
 ``dobotlink.MagicianGO.GetBatteryVoltage``, but the ``MagicianGO.`` /
-``MagicBox.`` segment itself is left untouched -- callers using the low-level
-``call``/``notify`` must spell those namespaces themselves (the high-level
-``MagicianGO`` wrapper adds ``MagicianGO.`` for you).
+``MagicBox.`` / ``Magician.`` segment itself is left untouched -- callers using
+the low-level ``call``/``notify`` must spell those namespaces themselves (the
+high-level ``MagicianGO`` wrapper adds ``MagicianGO.`` and the arm's
+``ArmCommands`` adds ``Magician.`` for you).
 
 A ``_ws_factory`` hook lets tests inject an in-memory socket double without
 opening a real connection; in production it defaults to
@@ -111,12 +113,16 @@ class DobotLinkClient:
 
     # ---- RPC ---------------------------------------------------------------
 
-    def call(self, method: str, **params: Any) -> Any:
+    def call(self, method: str, *, call_timeout: Optional[float] = None, **params: Any) -> Any:
         """Send a JSON-RPC request and block for the matching response.
 
         Args:
             method: RPC method name. Auto-prefixed with ``dobotlink.`` unless it
                 already starts with it.
+            call_timeout: Override the client's default ``timeout`` for just this
+                call. Keyword-only so it never collides with an RPC param that
+                happens to be named ``timeout`` (e.g. ``SetWAITCmd``). When
+                ``None`` (default), the client's ``timeout`` is used.
             **params: JSON-RPC ``params`` object.
 
         Returns:
@@ -125,10 +131,11 @@ class DobotLinkClient:
         Raises:
             DobotLinkError: if not connected, or if the response is a JSON-RPC
                 error.
-            DobotTimeoutError: if no matching response arrives within ``timeout``
-                (GO power/wireless link may be down). ``timeout`` is a **total
-                deadline** for the whole call, not a per-read budget — a stream
-                of unrelated notifications cannot extend the wait indefinitely.
+            DobotTimeoutError: if no matching response arrives within the
+                effective timeout (the device may be unresponsive or DobotLink
+                lost the link). The timeout is a **total deadline** for the
+                whole call, not a per-read budget — a stream of unrelated
+                notifications cannot extend the wait indefinitely.
         """
         ws = self._require_connection()
         self._id += 1
@@ -141,20 +148,23 @@ class DobotLinkClient:
         }
         ws.send(json.dumps(payload))
 
-        deadline = time.monotonic() + self._timeout
+        eff = call_timeout if call_timeout is not None else self._timeout
+        deadline = time.monotonic() + eff
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise DobotTimeoutError(
-                    f"timed out after {self._timeout}s waiting for "
-                    f"'{payload['method']}'. GO power/wireless link may be down."
+                    f"timed out after {eff}s waiting for "
+                    f"'{payload['method']}'. The device may be unresponsive or "
+                    f"DobotLink lost the link."
                 )
             try:
                 raw = ws.recv(timeout=remaining)
             except TimeoutError as exc:
                 raise DobotTimeoutError(
-                    f"timed out after {self._timeout}s waiting for "
-                    f"'{payload['method']}'. GO power/wireless link may be down."
+                    f"timed out after {eff}s waiting for "
+                    f"'{payload['method']}'. The device may be unresponsive or "
+                    f"DobotLink lost the link."
                 ) from exc
             message = json.loads(raw)
             # Skip notifications and responses to other requests.

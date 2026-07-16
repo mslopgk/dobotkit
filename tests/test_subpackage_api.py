@@ -1,8 +1,8 @@
 """The arm/go subpackages expose their public classes and stay import-light.
 
-``from dobotkit.arm import Magician`` and ``from dobotkit.go import
+``from dobotkit.arm import MagicianLite`` and ``from dobotkit.go import
 DobotLinkClient`` must work, while merely importing a subpackage must not
-eagerly drag in the heavy device dependency (``serial`` / ``websockets``).
+eagerly drag in the heavy device dependency (``websockets``).
 """
 from __future__ import annotations
 
@@ -11,11 +11,9 @@ import sys
 
 
 def test_arm_subpackage_exports():
-    from dobotkit.arm import LowLevelArm, Magician, SerialTransport
+    from dobotkit.arm import MagicianLite
 
-    assert Magician.__name__ == "Magician"
-    assert LowLevelArm.__name__ == "LowLevelArm"
-    assert SerialTransport.__name__ == "SerialTransport"
+    assert MagicianLite.__name__ == "MagicianLite"
 
 
 def test_go_subpackage_exports():
@@ -39,12 +37,12 @@ def test_arm_unknown_attr_raises():
 
 
 def test_importing_subpackages_is_lazy():
-    """`import dobotkit.arm` / `import dobotkit.go` must not import the heavy deps."""
+    """`import dobotkit.arm` / `import dobotkit.go` must not import the heavy dep."""
     code = (
         "import sys, dobotkit.arm, dobotkit.go;"
-        "print('serial' in sys.modules, 'websockets' in sys.modules)"
+        "print('websockets' in sys.modules)"
     )
     out = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     ).stdout.strip()
-    assert out == "False False", f"subpackage import was not lazy: {out!r}"
+    assert out == "False", f"subpackage import was not lazy: {out!r}"

@@ -48,7 +48,7 @@ import time
 from typing import Dict, Optional, Tuple
 
 from dobotkit import DobotConnectionError, DobotLinkError, MagicianGO
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 
 # Windows-only keyboard polling. Guarded so the file imports on any platform;
 # main() checks for it and bails out with a clear message if unavailable.

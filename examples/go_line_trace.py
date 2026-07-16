@@ -38,7 +38,7 @@ import time
 from typing import Tuple
 
 from dobotkit import DobotConnectionError, DobotLinkError, MagicianGO
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 
 # Easily tunable constants (safety / drive tuning).
 DEFAULT_PORT = "COM5"  # COM port the GO is connected on

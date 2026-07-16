@@ -7,44 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Changed (BREAKING)
+
+- **The arm is rewritten on DobotLink; the serial stack is gone.**
+  `dobotkit.Magician` (`pyserial`-based) is replaced by
+  `dobotkit.arm.magicianlite.MagicianLite` (exported as `dobotkit.MagicianLite`),
+  which speaks the arm's `Magician.*` RPC surface through the same DobotLink
+  JSON-RPC bridge (`ws://localhost:9090`) already used by the GO. **DobotLink.exe
+  is now required to drive the arm** — there is no more direct serial
+  connection. `pyserial` is dropped from `dependencies`; `websockets` is now
+  the library's only runtime dependency.
+
+  The old serial-only surface is gone entirely: `arm.lowlevel` / `LowLevelArm`,
+  `arm/protocol.py`, `arm/ids.py`, `arm/structures/`, `arm/transport.py`,
+  `arm/queue.py`, and `arm/alarms.py` no longer exist, and neither does the
+  `check_alarms=` motion-call argument. The now-dead serial test
+  infrastructure (`tests/conftest.py`'s `oracle` fixture/`_load_oracle` helper
+  and the `FakeSerial` double, plus the tests that exercised them) is removed.
+
+  `MagicianLite`'s high-level surface keeps the same shape as before:
+  `connect`/`disconnect`, context-manager teardown, `home`, `move_to`,
+  `move_relative`, `pick_and_place`, `set_speed`, `get_pose`, `suck`, `grip`,
+  and the `effector` / `sensors` / `io` device groups (see `groups.py`).
 
 - **MagicBox-routed peripheral calls degrade gracefully when the MagicBox is
-  absent.** On the Magician Lite, sensors, the external servo, the extended
-  (E-)motors and the Seeed RGB LED are reached through the MagicBox. The
-  high-level `SensorGroup` / `EffectorGroup` / `IOGroup` facades now catch a
-  missing MagicBox, emit a `RuntimeWarning`, and return `None` instead of
-  crashing teaching code. Affected:
-  `sensors.color/infrared/seeed_distance/seeed_color/seeed_temp/seeed_light/`
-  `seeed_rgb`, `effector.set_servo/get_servo`, `io.set_motor/set_motor_steps`
-  (read methods now return `Optional[...]`). Arm-native calls (motion, suction
-  cup, gripper, laser, base EIO) and `DobotConnectionError` are **not**
-  swallowed.
-
-  Verified on real hardware (Magician Lite, no MagicBox, 2026-07-16): the arm
-  answers *reads* (color / seeed_* / servo-angle) *without* a timeout but with
-  an **empty/short payload**, so the failure surfaces as `struct.error` inside
-  the `unpack_*` decoder (the frame is well-formed, so it is not a
-  `DobotProtocolError`). `_guard` therefore catches `DobotTimeoutError`,
-  `DobotProtocolError`, **and** `struct.error`. Two undetectable cases remain
-  (no error to catch, so no warning): the **infrared** sensor returns a
-  plausible default (`value=1`), and MagicBox-routed **writes**
-  (`set_servo` / `set_motor` / `set_motor_steps` / `seeed_rgb`) are ACKed
-  locally, so they return `None` with no physical effect. Both are returned
-  as-is and documented rather than silently pretended to work.
+  absent.** `sensors.adc/di/color/infrared/distance/temp/light/rgb` and
+  `io.get_di`/`io.get_adc` catch a missing MagicBox (or its attached sensor)
+  answering with `DobotTimeoutError` / `DobotProtocolError`, emit a
+  `RuntimeWarning`, and return `None` instead of crashing teaching code.
+  Arm-native calls (motion, `effector.suck`/`grip`/`servo`,
+  `io.set_do`/`set_pwm`/`set_multiplexing`) and a genuine
+  `DobotConnectionError` are **not** swallowed.
 
 ### Fixed
 
-- **Protocol command IDs verified against the official Dobot Communication
-  Protocol.** Cross-checked all 98 command IDs against the official protocol
-  (V1.1.5 PDF from `download.dobot.cc`) and Dobot's SDK `ProtocolID.h` /
-  Magician-Lite `cmd_id.h`. 84/98 are now confirmed (73 verified, 11 corrected).
-  Corrected genuinely wrong IDs — a rotated CP-command block
-  (CP2 / CPLE / CPCommon / CPRHold values were swapped), the CAL/angle-sensor
-  block (211–214 → official 140–143), `DeviceWithL` (6 → 3), `GetUserParams`
-  (14 → 220), `GetUART4PeripheralsType` (8 → 181) — and removed two duplicate
-  members. The 14 remaining `# unverified` IDs are DLL-name-only calls and
-  MagicBox/Seeed Grove extensions with no public wire ID.
+- **`home()` always queues `SetHOMEParams`/`SetHOMECmd`.** Previously
+  `queued=wait` meant `wait=False` sent them unqueued, which could desync the
+  on-device queue index; `wait` now only controls whether `home()` blocks
+  until the queue catches up, matching `move_to`'s always-queued behavior.
+- **Motion blocks on DobotLink's `isWaitForFinish`, not client-side polling.**
+  `move_to` / `move_relative` / `home` / `pick_and_place` with `wait=True` send
+  `isWaitForFinish=true` (with a generous per-call timeout) so DobotLink blocks
+  until the move physically completes — matching DobotLab. This replaced an
+  unreliable queued-command-index poll that returned before the move finished,
+  which let moves overlap and made DobotLink report `action timeout` (verified
+  on hardware). `pick_and_place` now runs its eight steps sequentially this way.
+- **Context-manager teardown (`__exit__`) no longer lets a `disconnect()`
+  failure escape.** Both `queue_stop()` and `disconnect()` are now
+  independently best-effort during teardown, so neither can mask the `with`
+  body's original exception.
+- **`DobotTimeoutError` messages are device-neutral.** They used to say "GO
+  power/wireless link may be down" even when raised for the arm; the shared
+  `DobotLinkClient` now says the device may be unresponsive or DobotLink lost
+  the link.
+
+### Known limitations
+
+- **A controller alarm silently blocks arm motion.** If the Magician Lite
+  controller has an active alarm (`GetAlarmsState` non-zero — observed as a
+  recurring `byte12` fault on the test unit), DobotLink accepts motion commands
+  (returns success) but the arm does not move; sensors / IO / effector still
+  work. The alarm is **not reliably clearable in software** (issuing
+  `ClearAllAlarmsState` was observed to *trigger* it on the test unit), so the
+  library does not call it automatically. **Power-cycle the arm to clear it.**
+  Motion is reliable once the controller is alarm-free and targets stay within
+  the workspace (a target that drives a joint near its travel limit can fault).
 
 ## [0.1.0] - 2026-06-30
 
@@ -92,9 +119,8 @@ Windows, macOS, or Linux.
 
 ### Known limitations / caveats
 
-- **A few protocol command IDs remain unverified.** Most command IDs are now
-  verified against the official Dobot protocol (see *Unreleased → Fixed*), but
-  14 remain tagged `# unverified`: DLL-name-only calls with no public wire ID
+- **A few protocol command IDs remain unverified.** 14 remain tagged
+  `# unverified`: DLL-name-only calls with no public wire ID
   (motor-mode, speed-ratio, restart-magic-box, fw-ready) and the MagicBox/Seeed
   Grove sensor extensions. Confirm these on hardware or against MagicBox-specific
   docs before relying on them. (Struct **byte-layouts** are independently
