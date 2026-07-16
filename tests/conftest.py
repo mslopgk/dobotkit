@@ -165,9 +165,10 @@ class FakeClient:
             programmed = self._results[method]
             if isinstance(programmed, list):
                 # One-shot queue: pop next, stick on last value when exhausted.
+                # Special case: single-element lists are returned as-is (for list return values).
                 if len(programmed) > 1:
                     return programmed.pop(0)
-                return programmed[0]
+                return programmed
             return programmed
         return self._result
 
