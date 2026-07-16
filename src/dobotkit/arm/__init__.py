@@ -1,19 +1,16 @@
-"""dobotkit.arm -- Magician Lite (4-axis arm) control over a pure-Python serial protocol.
+"""dobotkit.arm -- Magician Lite (4-axis arm) control over DobotLink.
 
-This subpackage reimplements the full Dobot serial command set (no DLL) and
-layers an ergonomic, safety-first API on top of it. The exported names are:
+This subpackage wraps the DobotLink ``Magician.*`` RPC surface
+(:mod:`dobotkit.arm.commands`) and layers an ergonomic, safety-first API on
+top of it. The exported name is:
 
-* :class:`~dobotkit.arm.magician.Magician` -- the high-level, Pythonic API
-  (context manager, ``move_to``/``home``/``pick_and_place``, ``.io``/
-  ``.sensors``/``.effector`` groups, pydobot-compatible aliases).
-* :class:`~dobotkit.arm.lowlevel.LowLevelArm` -- the complete 1:1 mapping of
-  every official SDK function, for niche commands the high-level API does not
-  wrap.
-* :class:`~dobotkit.arm.transport.SerialTransport` -- the raw serial transport.
+* :class:`~dobotkit.arm.magicianlite.MagicianLite` -- the high-level,
+  Pythonic API (context manager, ``move_to``/``home``/``pick_and_place``,
+  ``.io``/``.sensors``/``.effector`` groups).
 
-Names are resolved through a module-level :func:`__getattr__` (PEP 562) so that
-merely importing :mod:`dobotkit.arm` does not eagerly pull in ``pyserial``; the
-``serial`` dependency is imported only when one of these classes is first
+Names are resolved through a module-level :func:`__getattr__` (PEP 562) so
+that merely importing :mod:`dobotkit.arm` does not eagerly pull in
+``websockets``; that dependency is imported only when the class is first
 accessed.
 """
 from __future__ import annotations
@@ -21,19 +18,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only, not imported at runtime
-    from .lowlevel import LowLevelArm
-    from .magician import Magician
-    from .transport import SerialTransport
+    from .magicianlite import MagicianLite
 
 # Public name -> (submodule, attribute). Deferred to first access so importing
-# this subpackage never eagerly imports ``serial``.
+# this subpackage never eagerly imports ``websockets``.
 _LAZY = {
-    "Magician": ("dobotkit.arm.magician", "Magician"),
-    "LowLevelArm": ("dobotkit.arm.lowlevel", "LowLevelArm"),
-    "SerialTransport": ("dobotkit.arm.transport", "SerialTransport"),
+    "MagicianLite": ("dobotkit.arm.magicianlite", "MagicianLite"),
 }
 
-__all__ = ["LowLevelArm", "Magician", "SerialTransport"]
+__all__ = ["MagicianLite"]
 
 
 def __getattr__(name: str) -> Any:
