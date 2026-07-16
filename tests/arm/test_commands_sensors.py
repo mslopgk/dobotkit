@@ -54,9 +54,9 @@ def test_seeed_light_sensor():
 
 
 def test_seeed_rgb_led():
-    c = FakeClient(results={"Magician.SetSeeedRGBLED": {"result": "ok"}})
+    c = FakeClient(results={"Magician.SetSeeedRGBLed": {"result": "ok"}})
     assert _Cmds(c, "COM8").set_seeed_rgb(1, 255.0) == {"result": "ok"}
-    _, p = c.find_call("Magician.SetSeeedRGBLED")
+    _, p = c.find_call("Magician.SetSeeedRGBLed")
     assert p == {"portName": "COM8", "port": 1, "rgb": 255.0}
 
 

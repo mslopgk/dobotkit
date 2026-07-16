@@ -32,7 +32,7 @@ class SensorMixin(_Base):
         return self._call("GetSeeedLightSensor", port=int(port))
 
     def set_seeed_rgb(self, port: int, rgb: float) -> Any:
-        return self._call("SetSeeedRGBLED", port=int(port), rgb=float(rgb))
+        return self._call("SetSeeedRGBLed", port=int(port), rgb=float(rgb))
 
     def get_alarms_state(self) -> Any:
         return self._call("GetAlarmsState")

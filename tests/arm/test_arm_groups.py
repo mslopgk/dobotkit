@@ -76,9 +76,9 @@ def test_distance_temp_light_delegate():
 
 
 def test_rgb_delegates():
-    c = FakeClient(results={"Magician.SetSeeedRGBLED": True})
+    c = FakeClient(results={"Magician.SetSeeedRGBLed": True})
     assert SensorGroup(ArmCommands(c, "COM8")).rgb(0, 255.0) is True
-    _, p = c.find_call("Magician.SetSeeedRGBLED")
+    _, p = c.find_call("Magician.SetSeeedRGBLed")
     assert p["rgb"] == 255.0
 
 
