@@ -6,52 +6,34 @@ JSON-RPC surface. Every method (except :meth:`search`) issues
 private :meth:`_call` helper; :meth:`emergency_stop` is the lone command that
 uses ``client.notify`` so that stopping the car never blocks on a response.
 
-Two classes of drive command exist, and the distinction is a *safety* matter:
+**Drive model — continuous velocity only.** Motion is commanded as a velocity
+vector (:meth:`move`, plus the :meth:`forward`/:meth:`backward`/:meth:`strafe`/
+:meth:`spin` helpers and the bounded :meth:`drive_for` pulse): the car drives at
+the commanded velocity until told to stop. This is the trusted, hardware-proven
+path. For *precise* closed-loop motion (drive an exact distance, turn an exact
+angle) build a loop out of continuous :meth:`move` plus sensor feedback with
+:class:`dobotkit.go.navigation.PreciseMover` — the firmware's own queued
+closed-loop commands are not exposed here because they can hang on this chassis.
 
-* **Continuous velocity control** (:meth:`move`, :meth:`move_direct`,
-  :meth:`forward`, :meth:`backward`, :meth:`strafe`, :meth:`spin`, :meth:`stop`)
-  is **trusted** — the car drives at the commanded velocity until told to stop.
-* **Closed-loop / queued commands** (:meth:`unsafe_rotate`,
-  :meth:`unsafe_move_dist`, :meth:`unsafe_arc_rad`, :meth:`unsafe_arc_cent`,
-  :meth:`unsafe_increment_closed_loop`; :meth:`coord_closed_loop` is the lone
-  non-waiting exception) are issued with the firmware's
-  ``isQueued/isWaitForFinish`` wait flags and **can HANG** on this chassis when
-  the completion callback never arrives (hardware-measured). Their canonical
-  names carry the ``unsafe_`` prefix so they cannot be picked up by accident;
-  the old bare names remain as deprecated aliases that emit a ``UserWarning``.
-  For reliable precise motion build a closed loop out of continuous
-  :meth:`move` plus sensor feedback (see
-  ``dobotkit.go.navigation.PreciseMover`` / ``WaypointNav``).
+**MagicBox peripherals.** The GO carries the same MagicBox hub as the arm; its
+sensor/IO reads live on the ``MagicBox.*`` namespace and are exposed through the
+:attr:`sensors` and :attr:`io` groups (see :mod:`dobotkit.go.groups`). They
+coexist with the native drive/sensor calls on a single ``MagicianGO`` connection
+(hardware-verified 2026-07-16).
 
-Safety workflow (see research doc §8): after :meth:`connect_robot` always verify
-the link with a read such as :meth:`battery` (use :meth:`connect` which does
-this for you); check :meth:`clearance_ok` before driving; wrap motion in
-``try/finally`` ending in :meth:`emergency_stop`.
-
-Beyond the hardware-verified core above, the class also exposes the *extended*
-RPC surface mined from the official DobotLink sources (DobotEDU wrapper, CHM
-help, plugin protocol tables) on 2026-07-04: diagnostics/alarms, firmware
-trace configuration, absolute drive, extended CAR/ARM camera reads and
-calibration, firmware command-queue control, MagicBox stop-point service
-(``MagicBox.*`` namespace), light prompt, and device identity/maintenance.
-Those methods are **hardware-unverified (2026-07-04)** — each docstring says
-so — and follow the same safety split: the lone queued motion command,
-:meth:`unsafe_move_pos`, carries the ``unsafe_`` prefix and HANG warning.
+Safety workflow: after :meth:`connect_robot` always verify the link with a read
+such as :meth:`battery` (use :meth:`connect` which does this for you); check
+:meth:`clearance_ok` before driving; wrap motion in ``try/finally`` ending in
+:meth:`emergency_stop`.
 """
 from __future__ import annotations
 
 import math
 import time
-import warnings
 from typing import Any, Dict, Optional, Tuple, Union, cast
 
 from dobotkit.enums import LEDChannel
-
-# Wait flags shared by the queued/closed-loop commands. These push the command
-# onto the firmware queue and block until a completion callback arrives. On this
-# chassis that callback may never come -> the call HANGS until ``timeout`` (here
-# ~7 days). Mirrors the proven ``magiciango/go.py`` reference.
-_WAIT: Dict[str, Any] = {"isQueued": True, "isWaitForFinish": True, "timeout": 604800000}
+from dobotkit.go.groups import GoIOGroup, GoSensorGroup
 
 #: Hard cap (magnitude) applied to every continuous-velocity component. Speed
 #: units are firmware-defined and unconfirmed; 8..30 is the empirically safe
@@ -63,14 +45,6 @@ SPEED_CAP: float = 30.0
 ULTRA_MAX_CM: float = 40.0
 
 _ULTRA_KEYS: Tuple[str, str, str, str] = ("front", "back", "left", "right")
-
-# Deprecation text for the queued closed-loop commands (measured HANG risk).
-_HANG_WARNING = (
-    "MagicianGO.{name}() is a queued closed-loop command that can HANG on this "
-    "chassis (the completion callback never arrives) — prefer {alt}. "
-    "이 명령은 이 기체에서 멈춤(HANG)이 실측되었습니다. {alt} 를 사용하세요. "
-    "To acknowledge the risk explicitly, call unsafe_{name}() instead."
-)
 
 
 def _cap(value: float) -> float:
@@ -85,6 +59,7 @@ def _cap(value: float) -> float:
     if not math.isfinite(v):
         return 0.0
     return max(-SPEED_CAP, min(SPEED_CAP, v))
+
 
 # String aliases accepted by :meth:`rgb` ``number``, mapping to firmware LED ids.
 _LED_NAMES: Dict[str, int] = {
@@ -111,6 +86,13 @@ class MagicianGO:
         port_name: The COM port DobotLink uses to reach the GO. Defaults to
             ``"COM5"``. Sent as ``portName`` on every call except
             :meth:`search`.
+
+    Attributes:
+        sensors: :class:`~dobotkit.go.groups.GoSensorGroup` — MagicBox sensor
+            reads (ADC/DI by EIO pin; color/infrared/Seeed by Grove connector),
+            guarded so a missing peripheral degrades to ``None``.
+        io: :class:`~dobotkit.go.groups.GoIOGroup` — MagicBox digital/analog I/O
+            addressed by EIO pin (1..26).
     """
 
     def __init__(self, client: ClientLike, port_name: str = "COM5") -> None:
@@ -122,6 +104,10 @@ class MagicianGO:
         #: :meth:`disconnect_robot` or context-manager exit. Consumers (e.g.
         #: GUI controllers) read this to gate device features.
         self.connected: bool = False
+        #: MagicBox peripheral sensor reads (guarded -> ``None`` if absent).
+        self.sensors = GoSensorGroup(client, port_name)
+        #: MagicBox digital/analog I/O, addressed by EIO pin.
+        self.io = GoIOGroup(client, port_name)
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -143,7 +129,7 @@ class MagicianGO:
             with MagicianGO.open(port_name="COM5") as go:
                 go.forward(15)
                 ...
-            # <- line-trace OFF + emergency stop + socket closed, even on error
+            # <- emergency stop + confirming stop + socket closed, even on error
         """
         from dobotkit.link import DobotLinkClient
 
@@ -163,23 +149,10 @@ class MagicianGO:
     def __exit__(self, *exc: object) -> None:
         """Best-effort safety teardown so a crashed script never leaves the car driving.
 
-        Order matters on a degraded link:
-
         1. :meth:`emergency_stop` **first** — a fire-and-forget notify that can
-           never block, so the manual-drive case stops instantly even when the
-           link is hung (a blocking call here could stall the stop by the full
-           client timeout).
-        2. ``auto_trace(False)`` — blocking, but required: while firmware
-           patrol is active it overrides ``SetMoveSpeed``, so the notify alone
-           does not stop a patrolling car.
-        3. :meth:`cmd_queue_force_stop` — blocking, best-effort: a queued
-           motion command (e.g. an escaped :meth:`unsafe_move_pos`) keeps
-           executing **in firmware** and ``SetMoveSpeed(0)`` does not stop
-           queue execution; DobotLab's own emergency sequence issues this
-           queue force-stop first. hardware-unverified (2026-07-04) — do not
-           rely on it as the only stop.
-        4. :meth:`emergency_stop` again — re-assert zero velocity after the
-           patrol/queue controllers let go.
+           never block, so the car stops instantly even when the link is hung.
+        2. :meth:`stop` — a confirming blocking ``SetMoveSpeed(0)``; if it fails
+           the emergency stop is re-fired.
 
         Teardown errors are swallowed — they must never mask the original
         exception. When this instance was created via :meth:`open` the owned
@@ -190,17 +163,12 @@ class MagicianGO:
         except Exception:  # noqa: BLE001 - teardown must never raise
             pass
         try:
-            self.auto_trace(False)
-        except Exception:  # noqa: BLE001 - teardown must never raise
-            pass
-        try:
-            self.cmd_queue_force_stop()
-        except Exception:  # noqa: BLE001 - teardown must never raise
-            pass
-        try:
-            self.emergency_stop()
-        except Exception:  # noqa: BLE001 - teardown must never raise
-            pass
+            self.stop()
+        except Exception:  # noqa: BLE001 - any link error -> re-fire safe stop
+            try:
+                self.emergency_stop()
+            except Exception:  # noqa: BLE001 - teardown must never raise
+                pass
         self.connected = False  # the session is over either way
         if self._owns_client:
             try:
@@ -243,14 +211,6 @@ class MagicianGO:
         self.connected = False
         return self._call("DisconnectDobot")
 
-    def set_running_mode(self, mode: int) -> Any:
-        """Set the driving mode (``SetRunningMode(runningMode=mode)``).
-
-        ``mode`` is an integer; the concrete meaning of each value is
-        firmware-defined and not confirmed from source (examples probe ``0``/``1``).
-        """
-        return self._call("SetRunningMode", runningMode=mode)
-
     def connect(self, verify: bool = True) -> Any:
         """Connect to the GO and (by default) verify the link.
 
@@ -291,17 +251,6 @@ class MagicianGO:
         unconfirmed — 8..30 is the practical range on this chassis.
         """
         return self._call("SetMoveSpeed", x=_cap(x), y=_cap(y), r=_cap(r))
-
-    def move_direct(self, direction: int, speed: float) -> Any:
-        """Drive in a fixed ``direction`` at ``speed`` (``SetMoveSpeedDirect``).
-
-        The Python ``direction`` maps to the RPC field ``dir``. ``direction`` is
-        an integer enum (``0`` is *presumed* forward) whose value mapping is
-        firmware-defined and unconfirmed. ``speed`` magnitude is clamped to
-        :data:`SPEED_CAP` like every other continuous-velocity command. Prefer
-        :meth:`forward`/:meth:`move` for ordinary driving.
-        """
-        return self._call("SetMoveSpeedDirect", dir=direction, speed=_cap(speed))
 
     def forward(self, speed: float) -> Any:
         """Drive forward at ``speed`` (= ``move(x=speed)``)."""
@@ -364,128 +313,6 @@ class MagicianGO:
         self._client.notify(
             "MagicianGO.SetMoveSpeed", portName=self.port_name, x=0, y=0, r=0
         )
-
-    # ---- closed-loop / queued (WARNING: HANG risk) -------------------------
-    #
-    # The canonical names carry an ``unsafe_`` prefix so autocompletion and
-    # LLM-generated code cannot pick up a hang-prone command by accident. The
-    # old bare names are kept as deprecated aliases that emit a ``UserWarning``
-    # and delegate.
-
-    def unsafe_rotate(self, r: float, Vr: float) -> Any:
-        """Rotate by ``r`` degrees at angular speed ``Vr`` (``SetRotate``).
-
-        .. warning::
-            Closed-loop queued command — on this chassis the completion callback
-            may never arrive, so this call can **HANG** until the (~7 day)
-            timeout. For reliable in-place turns use
-            ``dobotkit.go.navigation.PreciseMover.turn_degrees`` (continuous
-            :meth:`move` + IMU feedback) instead.
-        """
-        return self._call("SetRotate", r=r, Vr=Vr, **_WAIT)
-
-    def rotate(self, r: float, Vr: float) -> Any:
-        """Deprecated alias of :meth:`unsafe_rotate` (measured HANG risk)."""
-        warnings.warn(
-            _HANG_WARNING.format(name="rotate", alt="PreciseMover.turn_degrees"),
-            UserWarning,
-            stacklevel=2,
-        )
-        return self.unsafe_rotate(r=r, Vr=Vr)
-
-    def unsafe_move_dist(self, x: float, y: float, Vx: float, Vy: float) -> Any:
-        """Move a fixed distance ``(x, y)`` at velocities ``(Vx, Vy)`` (``SetMoveDist``).
-
-        .. warning::
-            Closed-loop queued command — can **HANG** on this chassis (no
-            completion callback). Prefer ``PreciseMover.goto_distance``.
-        """
-        return self._call("SetMoveDist", x=x, y=y, Vx=Vx, Vy=Vy, **_WAIT)
-
-    def move_dist(self, x: float, y: float, Vx: float, Vy: float) -> Any:
-        """Deprecated alias of :meth:`unsafe_move_dist` (measured HANG risk)."""
-        warnings.warn(
-            _HANG_WARNING.format(name="move_dist", alt="PreciseMover.goto_distance"),
-            UserWarning,
-            stacklevel=2,
-        )
-        return self.unsafe_move_dist(x=x, y=y, Vx=Vx, Vy=Vy)
-
-    def unsafe_arc_rad(self, velocity: float, radius: float, angle: float, mode: int) -> Any:
-        """Drive a radius-based arc (``SetArcRad``).
-
-        ``mode`` is an integer direction/mode flag passed through to firmware
-        (meaning per value unconfirmed; examples use ``mode=0``).
-
-        .. warning::
-            Closed-loop queued command — can **HANG** on this chassis. Prefer a
-            continuous-move + feedback loop.
-        """
-        return self._call(
-            "SetArcRad", velocity=velocity, radius=radius, angle=angle, mode=mode, **_WAIT
-        )
-
-    def arc_rad(self, velocity: float, radius: float, angle: float, mode: int) -> Any:
-        """Deprecated alias of :meth:`unsafe_arc_rad` (measured HANG risk)."""
-        warnings.warn(
-            _HANG_WARNING.format(name="arc_rad", alt="a continuous-move feedback loop"),
-            UserWarning,
-            stacklevel=2,
-        )
-        return self.unsafe_arc_rad(velocity=velocity, radius=radius, angle=angle, mode=mode)
-
-    def unsafe_arc_cent(
-        self, velocity: float, x: float, y: float, angle: float, mode: int
-    ) -> Any:
-        """Drive a centre-point arc (``SetArcCent``).
-
-        ``mode`` is an integer direction/mode flag passed through to firmware
-        (meaning per value unconfirmed; examples use ``mode=0``).
-
-        .. warning::
-            Closed-loop queued command — can **HANG** on this chassis. Prefer a
-            continuous-move + feedback loop.
-        """
-        return self._call(
-            "SetArcCent", velocity=velocity, x=x, y=y, angle=angle, mode=mode, **_WAIT
-        )
-
-    def arc_cent(self, velocity: float, x: float, y: float, angle: float, mode: int) -> Any:
-        """Deprecated alias of :meth:`unsafe_arc_cent` (measured HANG risk)."""
-        warnings.warn(
-            _HANG_WARNING.format(name="arc_cent", alt="a continuous-move feedback loop"),
-            UserWarning,
-            stacklevel=2,
-        )
-        return self.unsafe_arc_cent(velocity=velocity, x=x, y=y, angle=angle, mode=mode)
-
-    def coord_closed_loop(self, is_enable: bool, angle: float) -> Any:
-        """Enable/disable coordinate closed-loop (``SetCoordClosedLoop``).
-
-        Unlike the other closed-loop commands this does **not** send the
-        ``isQueued/isWaitForFinish/timeout`` wait flags, so it does not wait for
-        a completion callback (different behaviour from :meth:`unsafe_rotate`
-        et al.) and is not hang-prone.
-        """
-        return self._call("SetCoordClosedLoop", isEnable=is_enable, angle=angle)
-
-    def unsafe_increment_closed_loop(self, x: float, y: float, angle: float) -> Any:
-        """Incremental closed-loop move (``SetIncrementClosedLoop``).
-
-        .. warning::
-            Closed-loop queued command — can **HANG** on this chassis. Prefer
-            ``PreciseMover`` (continuous move + sensor feedback).
-        """
-        return self._call("SetIncrementClosedLoop", x=x, y=y, angle=angle, **_WAIT)
-
-    def increment_closed_loop(self, x: float, y: float, angle: float) -> Any:
-        """Deprecated alias of :meth:`unsafe_increment_closed_loop` (measured HANG risk)."""
-        warnings.warn(
-            _HANG_WARNING.format(name="increment_closed_loop", alt="PreciseMover"),
-            UserWarning,
-            stacklevel=2,
-        )
-        return self.unsafe_increment_closed_loop(x=x, y=y, angle=angle)
 
     # ---- safety ------------------------------------------------------------
 
@@ -642,593 +469,43 @@ class MagicianGO:
         """
         return cast(Dict[str, float], self._call("GetImuAngle"))
 
-    def imu_speed(self) -> Dict[str, float]:
-        """Read raw IMU accel/gyro (``GetImuSpeed``).
-
-        Hardware-verified (2026-07-03): returns ``{ax, ay, az, gx, gy, gz}`` —
-        accelerometer in g (``az ~= -0.95`` at rest = gravity) plus gyro rates,
-        **not** an angular-speed ``{yaw}`` dict as the RPC name suggests.
-        """
-        return cast(Dict[str, float], self._call("GetImuSpeed"))
-
-    # ---- line-trace --------------------------------------------------------
-
-    def auto_trace(self, on: Any) -> Any:
-        """Turn line-tracing on/off (``SetTraceLoop`` then ``SetTraceAuto``).
-
-        Hardware-verified wire format (2026-07-02): the DobotLink plugin
-        declares ``isTrace`` as **int**, so sending a JSON bool is parsed as 0
-        and the command is silently ignored — patrol neither starts *nor
-        stops*. ``type=0`` is also required. DobotLab's own patrol button sends
-        exactly ``SetTraceAuto{isTrace: 1, type: 0}``.
-        """
-        self._call("SetTraceLoop", enable=bool(on))
-        return self._call("SetTraceAuto", isTrace=int(bool(on)), type=0)
-
-    def trace_speed(self, speed: float) -> Any:
-        """Set the line-tracing speed (``SetTraceSpeed``)."""
-        return self._call("SetTraceSpeed", speed=speed)
-
-    def trace_pid(self, p: float, i: float, d: float) -> Any:
-        """Set the line-following PID gains (``SetTracePid``)."""
-        return self._call("SetTracePid", p=p, i=i, d=d)
-
-    def trace_angle(self) -> Dict[str, int]:
-        """Read the CAR camera's detected line angle (``GetCarCameraAngle``).
-
-        Returns a normalised ``{"angle": int, "count": int}``; a malformed
-        firmware response degrades to ``{"angle": 0, "count": 0}`` ("no line")
-        rather than raising. Uses the CAR camera, so it is unaffected by an
-        inactive ARM camera (405). ``count == 0`` means no line is seen.
-        See also :meth:`firmware_trace_angle` — a *different*, unconfirmed RPC.
-        """
-        raw = self._call("GetCarCameraAngle")
-        if not isinstance(raw, dict):
-            return {"angle": 0, "count": 0}
-        try:
-            return {"angle": int(raw.get("angle", 0)), "count": int(raw.get("count", 0))}
-        except (TypeError, ValueError):
-            return {"angle": 0, "count": 0}
-
-    def line_error(self, center: float) -> Optional[float]:
-        """Line-following error ``angle - center`` in camera units, or ``None``.
-
-        The teaching primitive for a P-controller: read the error, steer with
-        ``move(x=speed, r=-kp * error)`` (steering sign is chassis-dependent —
-        verify on hardware by nudging the car off-line and watching the sign).
-        ``center`` is the measured on-line angle (~245 on the reference
-        chassis). Returns ``None`` when the camera reports no line
-        (``count == 0``) — treat that as "stop and search", not as error 0.
-        """
-        cam = self.trace_angle()
-        if cam["count"] <= 0:
-            return None
-        return float(cam["angle"]) - float(center)
-
-    # ---- camera (defensive parsing — see research doc §3.8) ----------------
-
-    def car_camera_obj(self) -> Any:
-        """CAR-camera deep-learning object detection (``GetCarCameraObj``).
-
-        Returns the firmware result (e.g. ``{count, dl_obj: [...]}``) verbatim;
-        field names vary by firmware/version, so callers should read it
-        defensively (prefer ``result.get("count", len(result.get("dl_obj", [])))``).
-        """
-        return self._call("GetCarCameraObj")
-
-    def arm_camera_obj(self) -> Any:
-        """ARM-camera object detection (``GetArmCameraObj``).
-
-        May be inactive on some chassis (firmware error ``405`` / timeout); fall
-        back to :meth:`car_camera_obj`. Returned structure is read defensively.
-        """
-        return self._call("GetArmCameraObj")
-
-    def arm_camera_tag(self) -> Any:
-        """ARM-camera AprilTag/marker detection (``GetArmCameraTag``).
-
-        May be inactive on some chassis (``405`` / timeout). Returned structure
-        is firmware-defined; read it defensively.
-        """
-        return self._call("GetArmCameraTag")
-
-    # ---- diagnostics (extended, hardware-unverified) -------------------------
+    # ---- diagnostics / alarms ----------------------------------------------
 
     def get_alarm_info(self) -> Any:
         """Read the active alarm/warning list (``GetAlarmInfo``).
 
         Returns the firmware result verbatim — expected shape is
-        ``{"warning": [...]}`` per the plugin protocol table, but read it
-        defensively. hardware-unverified (2026-07-04).
+        ``{"warning": [...]}`` per the plugin protocol table — read it
+        defensively.
         """
         return self._call("GetAlarmInfo")
 
     def clean_alarm_info(self) -> Any:
-        """Clear the active alarms (``CleanAlarmInfo``). hardware-unverified (2026-07-04)."""
+        """Clear the active alarms (``CleanAlarmInfo``)."""
         return self._call("CleanAlarmInfo")
 
     def running_state(self) -> Any:
-        """Read the running state (``GetRunningState``).
-
-        Expected shape ``{"runningState": int}`` is *presumed* from the plugin
-        string table only (no JS call site, and the CHM page for this name
-        documents a different RPC) — read the result defensively.
-        hardware-unverified (2026-07-04).
-        """
+        """Read the running state (``GetRunningState``); shape ``{"runningState": int}`` — read defensively."""
         return self._call("GetRunningState")
 
     def stall_protection(self) -> Any:
-        """Read the stall-protection flag (``GetStallProtection``).
-
-        Returns ``{"isHappened": int}`` per CHM/plugin table.
-        hardware-unverified (2026-07-04).
-        """
+        """Read the stall-protection flag (``GetStallProtection``); ``{"isHappened": int}``."""
         return self._call("GetStallProtection")
 
     def off_ground(self) -> Any:
-        """Read the wheels-off-ground flag (``GetOffGround``).
-
-        Returns ``{"isHappened": int}`` per CHM/plugin table.
-        hardware-unverified (2026-07-04).
-        """
+        """Read the wheels-off-ground flag (``GetOffGround``); ``{"isHappened": int}``."""
         return self._call("GetOffGround")
 
-    def get_move_speed(self) -> Any:
-        """Read the current velocity vector (``GetMoveSpeed``).
-
-        Returns ``{x, y, r}`` — ``x``/``y`` in cm/s (0..100 per CHM), ``r`` in
-        deg/s. The read-back counterpart of :meth:`move` (``SetMoveSpeed``).
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetMoveSpeed")
-
-    def get_running_mode(self) -> Any:
-        """Read the driving mode (``GetRunningMode``).
-
-        The counterpart of :meth:`set_running_mode`. Expected shape is
-        ``{"runningMode": int}`` (0 NORMAL / 1 SAFE), but the CHM keyword table
-        contradicts itself (``runningState``) — read the result defensively.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetRunningMode")
-
-    # ---- trace (firmware, hardware-unverified) -------------------------------
-
-    def firmware_trace_angle(self, **params: Any) -> Any:
-        """Firmware line-trace angle (``GetTraceAngle``) — wire params unconfirmed.
-
-        .. caution::
-            This RPC **may not exist on the wire**: it is absent from the
-            DobotLink plugin method table and the JS SDK, and the CHM only
-            carries the file name (the page body documents ``GetImuAngle``).
-            Expect an error from DobotLink. Any keyword arguments are passed
-            through verbatim (wire params unconfirmed).
-
-        Not the same thing as :meth:`trace_angle`, which calls
-        ``GetCarCameraAngle`` — the CAR-camera line angle that DobotEDU's own
-        ``get_trace_angle`` actually uses. Prefer :meth:`trace_angle` for line
-        following. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetTraceAngle", **params)
-
-    def set_trace_line_info(self, lineInfo: int) -> Any:
-        """Configure the trace line info (``SetTraceLineInfo(lineInfo=...)``).
-
-        ``lineInfo`` is an integer whose per-value meaning is firmware-defined
-        (CHM documents only the parameter name/type).
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetTraceLineInfo", lineInfo=lineInfo)
-
-    # ---- absolute drive (extended, hardware-unverified) ----------------------
-
-    def unsafe_move_pos(self, x: float, y: float, s: float) -> Any:
-        """Move to absolute world position ``(x, y)`` cm at speed ``s`` (``SetMovePos``).
-
-        ``x``/``y`` are target world coordinates in cm (odometer frame — see
-        :meth:`odometer`/:meth:`set_odometer`), ``s`` is the travel speed in
-        cm/s (0..100 per CHM). DobotEDU aligns heading first (``SetRotate`` by
-        ``-yaw``) before issuing this; raw calls translate without turning.
-
-        .. warning::
-            Closed-loop queued command (sent with the ``isQueued`` /
-            ``isWaitForFinish`` wait flags) — on this chassis the completion
-            callback may never arrive, so this call can **HANG** until the
-            (~7 day) timeout. Escaping a hung call (e.g. Ctrl-C) does **not**
-            cancel the queued move — it keeps executing in firmware, and
-            ``SetMoveSpeed(0)`` alone does not stop queue execution. The
-            context-manager teardown issues a best-effort
-            :meth:`cmd_queue_force_stop` (hardware-unverified) but do not
-            rely on it; call :meth:`cmd_queue_force_stop` /
-            :meth:`clean_cmd_queue` yourself when escaping. For reliable
-            point-to-point motion use
-            ``dobotkit.go.navigation.WaypointNav`` / ``PreciseMover``
-            (continuous :meth:`move` + sensor feedback) instead.
-
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetMovePos", x=x, y=y, s=s, **_WAIT)
-
-    def move_speed_time(
-        self, time: float, x: float = 0, y: float = 0, r: float = 0, isAck: bool = False
-    ) -> Any:
-        """Drive at velocity ``(x, y, r)`` for ``time`` seconds (``SetMoveSpeedTime``).
-
-        A firmware-side timed drive: unlike :meth:`drive_for` the stop happens
-        in firmware, not in Python. **Not** a queued action command (DobotLab's
-        own jog uses it with no queue flags and ``isAck=false``), so it does not
-        carry HANG risk. Each velocity component's magnitude is clamped to
-        :data:`SPEED_CAP` like every other continuous-velocity command; ``x``/
-        ``y`` in cm/s, ``r`` in deg/s per CHM.
-
-        .. caution::
-            Because the drive runs **in firmware**, it outlives a crashed
-            script — a typo like ``time=600`` would command a 10-minute drive
-            with nothing in Python left to stop it. ``time`` is therefore
-            clamped to **0..5 s**, mirroring :meth:`drive_for`. (The parameter
-            keeps the wire name ``time``; it shadows the :mod:`time` module
-            inside this method only.)
-
-        hardware-unverified (2026-07-04).
-        """
-        duration = max(0.0, min(5.0, float(time)))
-        return self._call(
-            "SetMoveSpeedTime", time=duration, x=_cap(x), y=_cap(y), r=_cap(r), isAck=isAck
-        )
-
-    def set_origin_point(self, enable: int) -> Any:
-        """Enable/disable the origin point (``SetOriginPoint(enable=...)``).
-
-        ``enable``: ``1`` use / ``0`` don't use (CHM). Not a queued action
-        command. hardware-unverified (2026-07-04).
-        """
-        return self._call("SetOriginPoint", enable=enable)
-
-    # ---- camera extended (hardware-unverified; defensive parsing) ------------
-
-    def car_camera_color(self) -> Any:
-        """CAR-camera colour-block detection (``GetCarCameraColor``).
-
-        Expected shape ``{count, color_obj: [{x, y, w, h, id}]}`` (count up to
-        5) per CHM — like :meth:`car_camera_obj`, the array key may be absent
-        when ``count == 0``, so read the result defensively (prefer
-        ``result.get("count", len(result.get("color_obj", [])))``).
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetCarCameraColor")
-
-    def car_camera_tag(self) -> Any:
-        """CAR-camera AprilTag detection (``GetCarCameraTag``).
-
-        Expected shape ``{count, aptag_obj: [{x, y, w, h, id, rot}]}`` (count up
-        to 5) per CHM — the array key may be absent when ``count == 0``, so
-        read the result defensively. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetCarCameraTag")
-
-    def get_car_camera_model(self) -> Any:
-        """Read the CAR-camera run model (``GetCarCameraRunModel``).
-
-        Returns ``{"runModelIndex": int}`` per the DobotEDU wrapper.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetCarCameraRunModel")
-
-    def set_car_camera_model(self, runModelIndex: int) -> Any:
-        """Select the CAR-camera run model (``SetCarCameraRunModel``).
-
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetCarCameraRunModel", runModelIndex=runModelIndex)
-
-    def get_car_camera_calibration_mode(self) -> Any:
-        """Read CAR-camera calibration mode (``GetCarCameraCalibrationMode``).
-
-        Expected shape ``{"isEnableCali": int}`` is *presumed* from the plugin
-        table — read the result defensively. (The CHM example misspells the
-        method without ``Car``; the plugin table carries the full name.)
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetCarCameraCalibrationMode")
-
-    def set_car_camera_calibration_mode(self, isEnableCali: int) -> Any:
-        """Enter/exit CAR-camera calibration mode (``SetCarCameraCalibrationMode``).
-
-        ``isEnableCali``: ``1`` enter / ``0`` exit (CHM).
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetCarCameraCalibrationMode", isEnableCali=isEnableCali)
-
-    def camera_calibration_data(self, april_list: str, device_list: str) -> Any:
-        """Fit camera calibration from 9-point data (``GetCameraCalibrationData``).
-
-        Despite the ``Get`` name this takes inputs: ``april_list`` and
-        ``device_list`` are JSON-encoded strings of nine ``[x, y]`` points
-        (AprilTag pixel coords and matching machine coords) — DobotLink feeds
-        them to its ``fit_homography`` tool and returns an error-report string
-        such as ``{"data": "max_x_err:0.44,..."}``. Read defensively.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call(
-            "GetCameraCalibrationData", april_list=april_list, device_list=device_list
-        )
-
-    def arm_camera_color(self) -> Any:
-        """ARM-camera colour-block detection (``GetArmCameraColor``).
-
-        Expected shape ``{count, color_obj: [{x, y, w, h, id}]}`` (count up to
-        5) per CHM — the array key may be absent when ``count == 0``, so read
-        the result defensively. May be inactive on some chassis (``405`` /
-        timeout) like the other ARM-camera reads. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetArmCameraColor")
-
-    def arm_camera_angle(self) -> Any:
-        """ARM-camera detected angle (``GetArmCameraAngle``).
-
-        Expected shape ``{"angle": int}`` per CHM; read defensively. May be
-        inactive on some chassis (``405`` / timeout).
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetArmCameraAngle")
-
-    def get_arm_camera_model(self) -> Any:
-        """Read the ARM-camera run model (``GetArmCameraRunModel``).
-
-        Returns ``{"runModelIndex": int}`` per the DobotEDU wrapper.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetArmCameraRunModel")
-
-    def set_arm_camera_model(self, runModelIndex: int) -> Any:
-        """Select the ARM-camera run model (``SetArmCameraRunModel``).
-
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetArmCameraRunModel", runModelIndex=runModelIndex)
-
-    def get_arm_camera_calibration_mode(self) -> Any:
-        """Read ARM-camera calibration mode (``GetArmCameraCalibrationMode``).
-
-        Expected shape ``{"isEnableCali": int}`` is *presumed* from the plugin
-        table — read the result defensively. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetArmCameraCalibrationMode")
-
-    def set_arm_camera_calibration_mode(self, isEnableCali: int) -> Any:
-        """Enter/exit ARM-camera calibration mode (``SetArmCameraCalibrationMode``).
-
-        ``isEnableCali``: ``1`` enter / ``0`` exit (CHM).
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetArmCameraCalibrationMode", isEnableCali=isEnableCali)
-
-    # ---- cmd queue (hardware-unverified) --------------------------------------
-
-    def clean_cmd_queue(self) -> Any:
-        """Clear the firmware command queue (``CleanCmdQueue``).
-
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("CleanCmdQueue")
-
-    def cmd_queue_start(self) -> Any:
-        """Start executing the firmware command queue (``SetCmdQueueStart``).
-
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetCmdQueueStart")
-
-    def cmd_queue_stop(self) -> Any:
-        """Stop the firmware command queue after the current command
-        (``SetCmdQueueStop``). hardware-unverified (2026-07-04)."""
-        return self._call("SetCmdQueueStop")
-
-    def cmd_queue_force_stop(self) -> Any:
-        """Force-stop the firmware command queue (``SetCmdQueueForcelyStop``).
-
-        DobotLab's own emergency sequence issues this first. Note this stops
-        the *queue*, not a continuous :meth:`move` — pair with
-        :meth:`emergency_stop` for velocity commands.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetCmdQueueForcelyStop")
-
-    def queued_cmd_current_index(self) -> Any:
-        """Read the executing queue index (``GetQueuedCmdCurrentIndex``).
-
-        Returns ``{"queueCmdCurrentIndex": int}`` — note the result key spells
-        ``queue``, not ``Queued`` (JS SDK-confirmed). The CHM documents this
-        RPC under the older name ``GetCmdQueueCurrentIndex``; the wire name is
-        ``GetQueuedCmdCurrentIndex``. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetQueuedCmdCurrentIndex")
-
-    def cmd_queue_available_space(self) -> Any:
-        """Read the free command-queue slots (``GetCmdQueueAvailableSpace``).
-
-        Returns ``{"space": int}`` per CHM/plugin table.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetCmdQueueAvailableSpace")
-
-    # ---- MagicBox (hardware-unverified) ---------------------------------------
+    # ---- MagicBox status ----------------------------------------------------
     #
-    # Only the stop-point RPCs live in the ``MagicBox.*`` JSON-RPC namespace;
-    # despite their names, GetMagicBoxMode/GetMagicBoxNum/SetRunningState are
-    # regular ``MagicianGO.*`` methods (JS call sites + CHM INPUT examples).
+    # Despite their names these are regular ``MagicianGO.*`` methods; the actual
+    # MagicBox sensor/IO reads live on the ``MagicBox.*`` namespace via the
+    # :attr:`sensors` / :attr:`io` groups.
 
     def magic_box_mode(self) -> Any:
-        """Read the MagicBox mode (``MagicianGO.GetMagicBoxMode``).
-
-        Returns ``{"mode": int}`` (JS-confirmed field). Note: MagicianGO
-        namespace despite the name. hardware-unverified (2026-07-04).
-        """
+        """Read the MagicBox mode (``MagicianGO.GetMagicBoxMode``); ``{"mode": int}``."""
         return self._call("GetMagicBoxMode")
 
     def magic_box_num(self) -> Any:
-        """Read the MagicBox device number (``MagicianGO.GetMagicBoxNum``).
-
-        Result field is *presumed* ``{"num": int}`` (plugin table); the CHM
-        instead documents a ``device`` hex id (lite ``0x02``, GO ``0x04``,
-        K210 car ``0x20``, K210 arm ``0x21``) — read the result defensively.
-        MagicianGO namespace despite the name. hardware-unverified (2026-07-04).
-        """
+        """Read the attached-MagicBox count/id (``MagicianGO.GetMagicBoxNum``); read defensively."""
         return self._call("GetMagicBoxNum")
-
-    def stop_point_state(self) -> Any:
-        """Read whether the stop point was reached (``MagicBox.GetStopPointState``).
-
-        Sent on the **MagicBox** JSON-RPC namespace (not ``MagicianGO``).
-        Returns ``{"result": bool}`` — ``True`` when arrived/stopped.
-        hardware-unverified (2026-07-04).
-        """
-        return self._client.call("MagicBox.GetStopPointState", portName=self.port_name)
-
-    def set_stop_point_param(self, scopeErr: int, stopErr: int) -> Any:
-        """Set stop-point tolerances (``MagicBox.SetStopPointParam``).
-
-        Sent on the **MagicBox** JSON-RPC namespace (not ``MagicianGO``).
-        ``scopeErr`` is the approach-range radius (default 40 cm), ``stopErr``
-        the stop precision (default 2 cm). hardware-unverified (2026-07-04).
-        """
-        return self._client.call(
-            "MagicBox.SetStopPointParam",
-            portName=self.port_name,
-            scopeErr=scopeErr,
-            stopErr=stopErr,
-        )
-
-    def set_stop_point_server(self, PointX: int, PointY: int) -> Any:
-        """Set the stop-point target (``MagicBox.SetStopPointServer``).
-
-        Sent on the **MagicBox** JSON-RPC namespace (not ``MagicianGO``). Wire
-        parameter names are capitalised ``PointX``/``PointY`` (source-confirmed
-        — keep the capital P). The coordinate **unit is unconfirmed** (cm vs
-        mm; the official docs never say — inherited from ``stop_point_test.py``).
-        hardware-unverified (2026-07-04).
-        """
-        return self._client.call(
-            "MagicBox.SetStopPointServer",
-            portName=self.port_name,
-            PointX=PointX,
-            PointY=PointY,
-        )
-
-    def set_running_state(self, **params: Any) -> Any:
-        """Set the running state (``MagicianGO.SetRunningState``) — wire params unconfirmed.
-
-        Only the method name is attested (plugin string table); no JS call site
-        or CHM page exists (the CHM file of this name documents a different
-        RPC). The parameter is *presumed* ``runningState: int`` — keyword
-        arguments are passed through verbatim. MagicianGO namespace despite
-        the MagicBox-flavoured context. hardware-unverified (2026-07-04).
-        """
-        return self._call("SetRunningState", **params)
-
-    # ---- output (extended, hardware-unverified) -------------------------------
-
-    def set_light_prompt(self, index: int) -> Any:
-        """Select the light prompt (``SetLightPrompt(index=...)``).
-
-        ``index``: ``0`` none, ``1`` USB, ``2`` low battery, ``3`` handle,
-        ``4`` script (CHM). hardware-unverified (2026-07-04).
-        """
-        return self._call("SetLightPrompt", index=index)
-
-    # ---- device info (hardware-unverified) ------------------------------------
-
-    def product_name(self) -> Any:
-        """Read the product name (``GetProductName``).
-
-        Returns ``{"productName": str}`` — DobotLab treats ``"MagicianGo"`` as
-        the valid-device marker. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetProductName")
-
-    def device_fw_software_version(self) -> Any:
-        """Read the firmware software version (``GetDeviceFwSoftwareVersion``).
-
-        JS consumers read ``{majorVersionNum, secondVersionNum,
-        revisionVersionNum, previousVersionNum}`` and format
-        ``V{major}.{second}.{revision}.{previous}``; the CHM example shows
-        older field names — read the result defensively.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("GetDeviceFwSoftwareVersion")
-
-    def device_fw_hardware_version(self) -> Any:
-        """Read the firmware hardware version (``GetDeviceFwHardwareVersion``).
-
-        Field names are *presumed* to match
-        :meth:`device_fw_software_version` (the CHM example shows older
-        names) — read the result defensively. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetDeviceFwHardwareVersion")
-
-    def device_id(self) -> Any:
-        """Read the device id (``GetDeviceID``).
-
-        Returns ``{"deviceID": [int, ...]}`` per CHM (whose example method
-        string carries a ``MagicBox.`` misprint — the plugin table places it
-        in MagicianGO). hardware-unverified (2026-07-04).
-        """
-        return self._call("GetDeviceID")
-
-    def get_device_name(self) -> Any:
-        """Read the device name (``GetDeviceName``).
-
-        Returns ``{"deviceName": str}``. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetDeviceName")
-
-    def set_device_name(self, deviceName: str) -> Any:
-        """Set the device name (``SetDeviceName``; CHM example ``"MgoNO.1"``).
-
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("SetDeviceName", deviceName=deviceName)
-
-    def get_device_sn(self) -> Any:
-        """Read the device serial number (``GetDeviceSN``).
-
-        Returns ``{"deviceSN": str}``. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetDeviceSN")
-
-    def set_device_sn(self, deviceSN: str) -> Any:
-        """Set the device serial number (``SetDeviceSN``).
-
-        CHM example ``"SNMGO20200821000061"``. hardware-unverified (2026-07-04).
-        """
-        return self._call("SetDeviceSN", deviceSN=deviceSN)
-
-    def device_time(self) -> Any:
-        """Read the device uptime clock (``GetDeviceTime``).
-
-        Returns ``{"gSystick": int, "passtime": "hh:mm:ss.z"}`` per CHM/plugin
-        table. hardware-unverified (2026-07-04).
-        """
-        return self._call("GetDeviceTime")
-
-    def device_reboot(self) -> Any:
-        """Reboot the device (``DeviceReboot``).
-
-        .. warning::
-            The GO **reboots immediately** — the DobotLink connection drops and
-            every subsequent call fails until the device is back up and
-            reconnected (:meth:`connect`). Do not call mid-motion.
-
-        The response (if any arrives before the link drops) is returned
-        verbatim. hardware-unverified (2026-07-04).
-        """
-        return self._call("DeviceReboot")
-
-    def heartbeat(self) -> Any:
-        """Keep-alive ping (``HeartBeat``).
-
-        DobotLab calls this on a 2000 ms client-side timeout and treats more
-        than 3 consecutive failures as a lost connection.
-        hardware-unverified (2026-07-04).
-        """
-        return self._call("HeartBeat")

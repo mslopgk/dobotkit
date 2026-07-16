@@ -12,9 +12,11 @@ What it checks, in order:
    read, because the connect handshake can report a *false* success.
 3. Ultrasonic sanity — validated read (``None`` means a malformed response;
    values clamp at the hardware's 40 cm ceiling).
-4. Line camera — ``trace_angle()``; ``count == 1`` with the car on a line means
-   the patrol/vision stack is healthy. Note the ``angle`` value: that is your
-   chassis' line-centre constant (``CENTER``) for P-control exercises.
+4. MagicBox — ``magic_box_num()`` / ``magic_box_mode()`` report whether a
+   MagicBox peripheral hub is attached. Its sensors read through ``go.sensors``
+   (``go.sensors.adc(22)`` for a potentiometer on EIO pin 22; ``color``/
+   ``infrared`` take a Grove connector 1..6) and ``go.io``; a missing
+   MagicBox/sensor degrades to ``None`` + a ``RuntimeWarning``.
 5. Odometer / IMU — both yaw sources printed side by side (they use different
    references and must never be mixed).
 
@@ -68,13 +70,13 @@ def main() -> int:
                 if max(ultra.values()) >= 40 else ""
             print(f"[OK]   ultrasonic   : {ultra}{note}")
 
-        cam = go.trace_angle()
-        if cam["count"] > 0:
-            print(f"[OK]   line camera  : angle={cam['angle']} count={cam['count']}"
-                  f"  <- on-line CENTER constant for P-control")
+        mbox = go.magic_box_num()
+        n = mbox.get("num", 0) if isinstance(mbox, dict) else 0
+        if n:
+            print(f"[OK]   magicbox     : {n} device(s) {mbox} — read sensors via "
+                  f"go.sensors.* / go.io.* (adc/di by EIO pin, color/infrared by Grove 1-6)")
         else:
-            print("[OK]   line camera  : no line in view (count=0) — put the car "
-                  "on a floor line to measure CENTER")
+            print("[OK]   magicbox     : none detected (attach one for Grove sensors)")
 
         odo = go.odometer()
         imu = go.imu_angle()
@@ -85,7 +87,7 @@ def main() -> int:
 
     print("-" * 60)
     print("All reads completed. The car never moved. You are ready for the")
-    print("drive examples (go_line_trace.py / go_waypoint_nav.py).")
+    print("drive example (go_teleop.py) and PreciseMover feedback motion.")
     return 0
 
 

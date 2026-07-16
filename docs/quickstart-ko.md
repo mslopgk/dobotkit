@@ -28,7 +28,7 @@ from dobotkit.go import MagicianGO
 with MagicianGO.open(port_name="COM5") as go:   # 연결 + battery() 검증
     print(go.battery())                          # {'powerVoltage': 11.7, ...}
     go.drive_for(x=15, seconds=1.0)              # 1초 전진 후 확실히 정지
-# with 블록이 어떻게 끝나든(예외/Ctrl-C 포함) 비상정지 + 트레이싱 OFF + 큐 강제정지 + 비상정지 + 소켓 종료
+# with 블록이 어떻게 끝나든(예외/Ctrl-C 포함) 비상정지 + 확인용 정지 + 소켓 종료
 ```
 
 ## 좌표·단위 규약
@@ -38,75 +38,56 @@ with MagicianGO.open(port_name="COM5") as go:   # 연결 + battery() 검증
 | `move(x, y, r)` | `x+` 전진, `y+` 좌횡이동(메카넘), `r+` 반시계 회전. **정지 명령 전까지 계속 달림** |
 | 속도 단위 | 펌웨어 정의·미확정. **8~30이 실용 범위**, 라이브러리가 ±30으로 강제 클램프 |
 | 오도미터 | mm / deg (월드 프레임, `set_odometer`로 영점화) |
-| `WaypointNav` | **cm** 단위 (매트 좌표) — `PreciseMover`는 **mm**. 혼동 주의 |
+| `PreciseMover` | 거리 **mm** / 회전 **deg** (연속 `move` + 오도미터·IMU 피드백) |
 | 초음파 | cm, **40 이상은 전부 40으로 클램프**(하드웨어 상한). 응답 이상 시 `None` |
-| 라인 카메라 | `trace_angle()` → `{"angle", "count"}`. `count==0` = 라인 없음. 중앙값은 기체별 실측(참조 기체 ≈ 245) |
+| MagicBox 센서 | `go.sensors.adc/di`·`go.io.*` = **EIO 핀 1~26**; `color`/`infrared`/`distance`/`temp`/`light`/`rgb` = **Grove 커넥터 1~6**. 미연결 시 `None`+경고 |
 
 ## 3대 금지사항 (안전 규칙)
 
-1. **`unsafe_` 접두 계열 직접 호출 금지 (현재 6종 전부)** — `unsafe_rotate`/`unsafe_move_dist`/
-   `unsafe_arc_rad`/`unsafe_arc_cent`/`unsafe_increment_closed_loop`는 이 기체에서
-   **행(HANG)이 실측**된 펌웨어 큐 명령이고, `unsafe_move_pos`(신규 2026-07-04)도 동일한
-   큐드+대기 계열로 확정되어 같은 위험이 추정됩니다.
-   회전은 `PreciseMover.turn_degrees`, 직진은 `PreciseMover.goto_distance`를 쓰세요.
-   (구명칭 `rotate` 등은 경고를 내며 동작하는 폐기 예정 별칭입니다.)
+1. **정밀 이동은 `PreciseMover`로** — 회전은 `PreciseMover.turn_degrees`, 직진은
+   `PreciseMover.goto_distance`(연속 `move()` + 센서 피드백)를 쓰세요. 펌웨어 내장
+   폐루프 명령(`rotate`/`move_dist`/`arc_*`/`*_closed_loop`)은 이 기체에서 완료
+   콜백이 오지 않아 **행(HANG)이 실측**돼 라이브러리에서 제거되었습니다.
 2. **무한 루프 금지** — 주행 루프는 반드시 `for i in range(n):` 같은 유한 루프로.
 3. **`with` 없이 `move()` 금지** — 항상 `with MagicianGO.open(...) as go:` 안에서.
    크래시해도 로봇이 서 있는 것은 컨텍스트 매니저 덕분입니다. 한 번의 짧은 주행은
    `go.drive_for(x=..., seconds=...)`(데드맨 헬퍼, 최대 5초)를 우선 사용하세요.
 
-## 검증된 라인 순찰 (펌웨어 내장)
+## 정밀 이동 (PreciseMover)
 
-DobotLab의 '라인 순찰' 버튼과 동일한 시퀀스입니다. 공식 파라미터: 속도 20, PID (0.5, 0, 0.5).
-(PID를 50처럼 크게 주면 요동치다 라인을 이탈합니다 — 실측.)
+정확한 거리·각도가 필요하면 연속 `move()` + 오도미터/IMU 피드백으로 도는
+`PreciseMover`를 씁니다. 절대 시간 타임아웃·정지 가드가 내장돼 무한 대기가 없습니다.
 
 ```python
-import time
+from dobotkit.go import MagicianGO
+from dobotkit.go.navigation import PreciseMover
+
+with MagicianGO.open(port_name="COM5") as go:
+    mover = PreciseMover(go)
+    mover.goto_distance(300, speed=20)   # 약 300mm 전진 후 정지
+    mover.turn_degrees(90, speed=20)     # +90도(반시계) IMU 폐루프
+```
+
+## MagicBox 센서 읽기
+
+GO에 MagicBox를 달면 `go.sensors` / `go.io`로 센서를 읽습니다. `MagicianGO`로 한 번
+연결하면 같은 연결에서 그대로 동작합니다(별도 MagicBox 연결 불필요). **주소 체계가
+둘로 나뉩니다**:
+
+- **아날로그/디지털/PWM**(`adc`·`di`·`set_do`·`set_pwm`·`set_multiplexing`) → **EIO 핀 1~26**
+- **컬러·광전(적외)·Seeed**(`color`·`infrared`·`distance`·`temp`·`light`·`rgb`) → **Grove 커넥터 1~6**
+
+미연결 시 `None`+`RuntimeWarning`으로 degrade하므로 수업 코드가 멈추지 않습니다.
+
+```python
 from dobotkit.go import MagicianGO
 
 with MagicianGO.open(port_name="COM5") as go:
-    go.trace_speed(20)
-    go.trace_pid(0.5, 0, 0.5)
-    go.auto_trace(True)          # 내부적으로 isTrace=1(int)+type=0 — 검증된 포맷
-    for _ in range(200):         # 유한 루프: 최대 20초
-        u = go.ultrasonic()
-        if u is None or min(u.values()) < 15:   # 모르면 멈춘다
-            break
-        time.sleep(0.1)
-    go.auto_trace(False)
-```
-
-## 자체 P제어 라인트레이서 (교육용 최소 예제)
-
-펌웨어를 끄고 같은 센서로 직접 조향합니다. `line_error()`가 인지-판단의 경계입니다.
-
-```python
-import time
-from dobotkit.go import MagicianGO
-
-KP, SPEED, CENTER = 0.3, 12, 245   # CENTER는 로봇을 라인에 올려두고 실측할 것
-
-with MagicianGO.open(port_name="COM5") as go:
-    for _ in range(200):                    # 유한 루프
-        err = go.line_error(center=CENTER)  # None = 라인 없음
-        if err is None:
-            go.stop()                       # 안 보이면 서 있는 게 안전
-            continue
-        go.move(x=SPEED, r=-KP * err)       # 조향 부호는 기체별 확인:
-        time.sleep(0.1)                     # 라인 오른쪽으로 틀었을 때
-                                            # angle > CENTER 인지 먼저 관찰
-```
-
-## 좌표 주행 (웨이포인트)
-
-```python
-from dobotkit.go import MagicianGO, WaypointNav
-
-with MagicianGO.open(port_name="COM5") as go:
-    nav = WaypointNav(go)
-    nav.set_start(20, 20, heading_deg=0)    # 필수! 없으면 go_to가 예외
-    for wx, wy in [(100, 20), (100, 80)]:
-        nav.go_to(wx, wy, raise_on_abort=True)   # 실패를 조용히 넘기지 않음
+    v = go.sensors.adc(22)          # Grove 4번 가변저항 = EIO 핀 22 (0~4095, 실측)
+    if v is not None:
+        print("가변저항:", v)
+    print("컬러:", go.sensors.color(1))     # Grove 1번
+    print("적외:", go.sensors.infrared(2))  # Grove 2번
 ```
 
 ## 자주 겪는 문제
@@ -116,6 +97,6 @@ with MagicianGO.open(port_name="COM5") as go:
 | 연결 실패 | DobotLink.exe 미실행 → 실행 후 재시도 |
 | `code 6: already opened device` | DobotLink 내부에서 포트가 선점/꼬임 — **무선 동글을 뺐다 다시 끼우면 풀림**(실측). 그래도 안 되면 GO 끈 상태에서 DobotLink 재시작 |
 | `battery()` 타임아웃 | GO 전원 꺼짐/동글 미연결 (핸드셰이크는 거짓 성공 가능 — 그래서 검증이 기본) |
-| 명령은 OK인데 안 움직임 | 과거 `auto_trace`의 bool 버그가 원인이었음 — 이 라이브러리는 수정 완료. 다른 스택 사용 시 isTrace가 int인지 확인 |
-| P제어가 반대로 꺾음 | 조향 부호가 기체별 상이 — 위 확인 절차로 부호 결정 |
-| `rotate`가 안 끝남 | 펌웨어 큐 명령 행(HANG) — `PreciseMover.turn_degrees` 사용 |
+| 명령은 OK인데 안 움직임 | GO **본체 전원** 확인(MagicBox만 USB로 켜져 섀시가 응답 안 할 수 있음). 컨트롤러 알람은 `get_alarm_info()`/`clean_alarm_info()` |
+| MagicBox 센서가 0/`None` | `adc`/`di`엔 Grove 번호가 아니라 **EIO 핀(1~26)** 을 넘겨야 함(가변저항 Grove4=EIO22). 센서 미연결이면 `None`+경고가 정상 |
+| 정밀 회전/직진이 안 끝남 | 내장 폐루프는 제거됨 — `PreciseMover.turn_degrees`/`goto_distance` 사용 |

@@ -25,9 +25,12 @@ with dobotkit.MagicianLite(port="auto") as arm:
   API (home, move, pick-and-place, IO, sensors, end-effectors) wraps the arm's
   `Magician.*` DobotLink JSON-RPC surface. No serial port, no serial-library
   runtime dependency.
-- **Full Magician GO coverage** — the complete DobotLink `MagicianGO.*` surface:
-  continuous drive, closed-loop commands, ultrasonic/IMU/odometer sensors, RGB
-  LEDs, buzzer, line-tracing, and camera object/tag detection.
+- **Magician GO over DobotLink** — a clean `MagicianGO` core: continuous drive
+  (forward/strafe/spin + bounded `drive_for`), ultrasonic/IMU/odometer/battery
+  sensors, RGB LEDs, buzzer, alarms, and `PreciseMover` sensor-feedback motion
+  (drive an exact distance / turn an exact angle). Its **MagicBox** peripherals
+  read through `go.sensors` / `go.io` (ADC/DI by EIO pin, color/infrared/Seeed
+  by Grove connector) on the same connection.
 - **Pure Python** — only `websockets` at runtime. No DLL, no vendored native
   code, no DobotDll/DobotRPC dependency. Cross-platform and `pip`-installable.
 - **Fully type-hinted** — every public symbol is typed and the package ships
@@ -154,33 +157,28 @@ Python  --(WebSocket JSON-RPC)-->  DobotLink  --(COM/wireless)-->  GO
 
 ```python
 from dobotkit import MagicianGO
-from dobotkit.link import DobotLinkClient
-from dobotkit.go.navigation import WaypointNav
+from dobotkit.go.navigation import PreciseMover
 
-# Connect to DobotLink (default ws://localhost:9090) as a context manager.
-with DobotLinkClient() as client:
-    go = MagicianGO(client, port_name="COM5")
-
-    # connect() verifies the link with a battery read-back so a dead
-    # power/wireless link surfaces immediately.
-    go.connect()
-
+# open() connects DobotLink + verifies the GO link with a battery read-back,
+# and (as a context manager) stops the car + closes the socket on every exit.
+with MagicianGO.open(port_name="COM5") as go:
     try:
         # Continuous velocity control is reliable: check clearance, then drive.
         ok, info = go.clearance_ok(x=1, threshold=20)
         if ok:
-            go.forward(20)   # drive forward at speed 20 until told to stop
-        # ... do work ...
+            go.drive_for(x=20, seconds=1.0)   # bounded forward pulse, auto-stops
     finally:
-        go.stop()            # always halt
         go.emergency_stop()  # fire-and-forget safety stop (never blocks)
 
-    # For precise, reliable motion use the sensor-feedback navigation layer
-    # instead of the built-in closed-loop commands (which can HANG, see below).
-    nav = WaypointNav(go)
-    nav.set_start(x_cm=0, y_cm=0, heading_deg=0)   # zero the odometer to the mat
-    result = nav.go_to(x_cm=50, y_cm=30, arrive_tol_cm=2.0)
-    print("arrived:", result["arrived"], "residual_cm:", result["residual_cm"])
+    # For precise motion use the sensor-feedback layer (continuous move + IMU/
+    # odometer feedback) — drive an exact distance or turn an exact angle.
+    mover = PreciseMover(go)
+    mover.goto_distance(300, speed=20)   # ~300 mm forward, then stop
+    mover.turn_degrees(90, speed=20)     # +90 deg (CCW), IMU-closed-loop
+
+    # MagicBox peripherals ride the same connection (guarded -> None if absent):
+    knob = go.sensors.adc(22)            # potentiometer on EIO pin 22 (0..4095)
+    print("knob:", knob)
 ```
 
 ---
@@ -210,17 +208,16 @@ comes from the Dobot Magician Lite and Magician GO operating notes.
   a real battery read), because the raw handshake can report a *false* success.
 - **Clearance before driving.** Call `clearance_ok(...)` for the intended
   direction of travel and only drive when it returns `True`.
-- **Timeouts everywhere.** The `PreciseMover` / `WaypointNav` control loops use
-  absolute wall-clock timeouts (`time.monotonic`) so they can never spin forever,
-  and every path ends in `emergency_stop`.
-- **Always stop.** Wrap motion in `try/finally` ending in `go.stop()` and
-  `go.emergency_stop()` (the latter is a non-blocking notify, safe from a
-  `finally` block or interrupt path even if the link is degraded).
-- **Avoid the built-in closed-loop commands.** `rotate`, `move_dist`, `arc_rad`,
-  `arc_cent`, and `increment_closed_loop` are issued with the firmware's
-  wait flags and **can HANG** on this chassis if the completion callback never
-  arrives. Use `PreciseMover` / `WaypointNav` (continuous move + sensor feedback)
-  for reliable precise motion.
+- **Timeouts everywhere.** The `PreciseMover` control loops use absolute
+  wall-clock timeouts (`time.monotonic`) so they can never spin forever, and
+  every path ends in `emergency_stop`.
+- **Always stop.** Wrap motion in `try/finally` ending in `go.emergency_stop()`
+  (a non-blocking notify, safe from a `finally` block or interrupt path even if
+  the link is degraded); the `MagicianGO` context manager also stops on exit.
+- **Precise motion = continuous move + feedback.** For exact distances/turns use
+  `PreciseMover` (continuous `move()` sampled against the odometer/IMU). The
+  firmware's own built-in closed-loop commands were removed from this library
+  because they can hang indefinitely on this chassis.
 
 ---
 
@@ -231,11 +228,15 @@ comes from the Dobot Magician Lite and Magician GO operating notes.
   DobotLink JSON-RPC surface. DobotLink owns the wire protocol, struct
   packing, and command IDs -- there is no serial transport or wire-level code
   in this library.
-- **Full Magician GO API.** The complete DobotLink `MagicianGO.*` surface is
-  wrapped by the typed `MagicianGO` class.
-- **GO turn direction is unconfirmed.** The GO closed-loop turn direction (yaw
-  sign convention) still needs on-hardware confirmation, and the built-in
-  closed-loop commands can hang (see **Safety**).
+- **Magician GO core, hardware-verified.** The typed `MagicianGO` class wraps a
+  clean, generally-used slice of the `MagicianGO.*` surface (drive, native
+  sensors, RGB/buzzer, alarms) plus `PreciseMover` feedback motion. Turn
+  direction is confirmed: `r+` = CCW (`PreciseMover.turn_degrees(+90)` verified).
+- **GO MagicBox peripherals, hardware-verified (2026-07-16).** `go.sensors` /
+  `go.io` read the GO's MagicBox on the `MagicBox.*` namespace over the same
+  connection. ADC/DI/DO/PWM address an **EIO pin (1..26)**; color/infrared/Seeed
+  address a **Grove connector (1..6)**. Reads degrade to `None` + a warning when
+  the MagicBox or sensor is absent. (Verified: potentiometer on Grove 4 = EIO 22.)
 
 ---
 
@@ -254,11 +255,12 @@ dobotkit/
 │   │   └── magicianlite.py  # high-level MagicianLite API
 │   └── go/                  # Magician GO stack, via DobotLink
 │       ├── geometry.py      # pure helpers (yaw_delta, bearing, clamp_speed)
+│       ├── groups.py        # MagicBox sensor/IO facades (go.sensors / go.io)
 │       ├── magiciango.py    # high-level MagicianGO wrapper
-│       └── navigation.py    # PreciseMover + WaypointNav
+│       └── navigation.py    # PreciseMover (sensor-feedback motion)
 ├── examples/                # runnable demos:
 │                            #   arm — arm_magicianlite
-│                            #   GO  — go_teleop, go_waypoint_nav, go_line_trace
+│                            #   GO  — go_discover, go_teleop, go_magicbox_sensor
 ├── tests/                   # mirror of src; FakeWebSocket / FakeClient doubles
 └── docs/                    # API reference
 ```
@@ -276,7 +278,7 @@ from dobotkit import (                              # exceptions
     DobotProtocolError, DobotAlarmError, DobotLinkError, DobotValueError,
 )
 from dobotkit.link import DobotLinkClient
-from dobotkit.go.navigation import PreciseMover, WaypointNav
+from dobotkit.go.navigation import PreciseMover, NavigationAborted
 ```
 
 ## License
