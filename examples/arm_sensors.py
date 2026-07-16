@@ -25,31 +25,53 @@ def main(port: str = "auto", grove_port: int = 1) -> None:
     with dobotkit.Magician(port=port) as arm:
         sensors = arm.sensors
 
+        # Every sensor read is MagicBox-routed: if the MagicBox (or the sensor)
+        # is not connected it returns ``None`` (with a warning) instead of
+        # raising, so guard each reading before using it.
+
         # --- color sensor (GP port) --------------------------------------- #
         # ``color`` enables the sensor on the given port then reads (r, g, b).
         rgb = sensors.color(ColorPort.GP1)
-        print(f"color sensor RGB: r={rgb.r} g={rgb.g} b={rgb.b}")
+        if rgb is None:
+            print("color sensor: 읽지 못함 (매직박스/센서 연결 확인)")
+        else:
+            print(f"color sensor RGB: r={rgb.r} g={rgb.g} b={rgb.b}")
 
         # --- infrared sensor (GP port) ------------------------------------ #
         ir = sensors.infrared(ColorPort.GP2)
-        print(f"infrared value: {ir.value}")
+        if ir is None:
+            print("infrared: 읽지 못함 (매직박스/센서 연결 확인)")
+        else:
+            print(f"infrared value: {ir.value}")
 
         # --- Seeed Grove sensors (Magic Box ports 1-6) -------------------- #
         # Distance takes the port directly; the read returns millimetres.
         distance = sensors.seeed_distance(grove_port)
-        print(f"distance: {distance.distance} mm")
+        if distance is None:
+            print("distance: 읽지 못함 (매직박스/센서 연결 확인)")
+        else:
+            print(f"distance: {distance.distance} mm")
 
         # Temp/humidity: select the port, then read (temperature, humidity).
         th = sensors.seeed_temp(grove_port)
-        print(f"temperature: {th.temperature} C, humidity: {th.humidity} %")
+        if th is None:
+            print("temp/humidity: 읽지 못함 (매직박스/센서 연결 확인)")
+        else:
+            print(f"temperature: {th.temperature} C, humidity: {th.humidity} %")
 
         # Color (Seeed): returns (r, g, b, cct).
         sc = sensors.seeed_color(grove_port)
-        print(f"seeed color: r={sc.r} g={sc.g} b={sc.b} cct={sc.cct}")
+        if sc is None:
+            print("seeed color: 읽지 못함 (매직박스/센서 연결 확인)")
+        else:
+            print(f"seeed color: r={sc.r} g={sc.g} b={sc.b} cct={sc.cct}")
 
         # Light: returns a lux value.
         light = sensors.seeed_light(grove_port)
-        print(f"light: {light.lux} lux")
+        if light is None:
+            print("light: 읽지 못함 (매직박스/센서 연결 확인)")
+        else:
+            print(f"light: {light.lux} lux")
 
         # --- alarms -------------------------------------------------------- #
         # Read the active alarm bitmap and decode it to human-readable codes.

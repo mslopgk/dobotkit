@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MagicBox-routed peripheral calls degrade gracefully when the MagicBox is
+  absent.** On the Magician Lite, sensors, the external servo, the extended
+  (E-)motors and the Seeed RGB LED are reached through the MagicBox. The
+  high-level `SensorGroup` / `EffectorGroup` / `IOGroup` facades now catch a
+  missing MagicBox, emit a `RuntimeWarning`, and return `None` instead of
+  crashing teaching code. Affected:
+  `sensors.color/infrared/seeed_distance/seeed_color/seeed_temp/seeed_light/`
+  `seeed_rgb`, `effector.set_servo/get_servo`, `io.set_motor/set_motor_steps`
+  (read methods now return `Optional[...]`). Arm-native calls (motion, suction
+  cup, gripper, laser, base EIO) and `DobotConnectionError` are **not**
+  swallowed.
+
+  Verified on real hardware (Magician Lite, no MagicBox, 2026-07-16): the arm
+  answers *reads* (color / seeed_* / servo-angle) *without* a timeout but with
+  an **empty/short payload**, so the failure surfaces as `struct.error` inside
+  the `unpack_*` decoder (the frame is well-formed, so it is not a
+  `DobotProtocolError`). `_guard` therefore catches `DobotTimeoutError`,
+  `DobotProtocolError`, **and** `struct.error`. Two undetectable cases remain
+  (no error to catch, so no warning): the **infrared** sensor returns a
+  plausible default (`value=1`), and MagicBox-routed **writes**
+  (`set_servo` / `set_motor` / `set_motor_steps` / `seeed_rgb`) are ACKed
+  locally, so they return `None` with no physical effect. Both are returned
+  as-is and documented rather than silently pretended to work.
+
 ### Fixed
 
 - **Protocol command IDs verified against the official Dobot Communication

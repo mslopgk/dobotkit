@@ -111,6 +111,40 @@ Pass `check_alarms=True` to a motion call to read the alarm bitmap first and
 raise `DobotAlarmError` (carrying `.codes`) instead of driving into a faulted
 state.
 
+### MagicBox peripherals (sensors, servo, motors)
+
+Sensors, the external servo, the extended (E-)motors, and the Seeed RGB LED are
+reached through the **MagicBox**. If it (or its device) is not connected, the
+arm returns no response and these high-level calls **warn and return `None`**
+rather than raising — so teaching code keeps running:
+
+```python
+reading = arm.sensors.color(port=0)   # RuntimeWarning + None if no MagicBox
+if reading is None:
+    print("색 센서를 읽지 못했습니다 — 매직박스/센서 연결 확인")
+else:
+    print(reading)
+```
+
+This covers `sensors.*`, `effector.set_servo` / `get_servo`, and
+`io.set_motor` / `set_motor_steps`. Arm-native operations (motion, suction cup,
+gripper, laser, base digital/analog IO) are unaffected and still raise on error,
+as does a genuine connection error (`DobotConnectionError`, e.g. the port was
+never opened).
+
+On real hardware (verified 2026-07-16) a missing MagicBox does not time out —
+the arm replies with an empty payload, so decoding fails and the facade returns
+`None`. Two cases can't be detected (no error is raised), so they warn nothing:
+
+- the **infrared** sensor returns a plausible default (`value=1`), so
+  `sensors.infrared(...)` can't tell "no MagicBox" from a real reading;
+- MagicBox-routed **writes** (`effector.set_servo`, `io.set_motor` /
+  `set_motor_steps`, `sensors.seeed_rgb`) are ACKed by the controller and
+  return `None` with **no physical effect** — the servo/motor/LED simply does
+  not move.
+
+Treat both as suspect until the MagicBox and its device are confirmed connected.
+
 ## Quickstart — Magician GO (mobile robot)
 
 The GO is not driven directly: Python talks to the **DobotLink** desktop service
