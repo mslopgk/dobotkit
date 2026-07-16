@@ -18,3 +18,9 @@ def test_search_sends_no_portname():
 def test_current_index_reads_field():
     c = FakeClient(results={"Magician.GetQueuedCmdCurrentIndex": {"queuedCmdIndex": 7}})
     assert ArmCommands(c, "COM8").current_index() == 7
+
+
+def test_clear_alarms_sends_rpc():
+    c = FakeClient(results={"Magician.ClearAllAlarmsState": True})
+    assert ArmCommands(c, "COM8").clear_alarms() is True
+    assert c.find_call("Magician.ClearAllAlarmsState") == ("Magician.ClearAllAlarmsState", {"portName": "COM8"})

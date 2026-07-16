@@ -30,3 +30,13 @@ class ConnectionMixin(_Base):
     def current_index(self) -> int:
         resp = self._call("GetQueuedCmdCurrentIndex")
         return self._queued_index(resp)
+
+    # -- alarms --
+    def clear_alarms(self) -> Any:
+        """Clear all active controller alarms (``ClearAllAlarmsState``).
+
+        An active alarm makes the controller **silently refuse all PTP motion**
+        (commands are accepted but the arm does not move), so this is issued at
+        :meth:`~dobotkit.arm.magicianlite.MagicianLite.connect` time.
+        """
+        return self._call("ClearAllAlarmsState")

@@ -85,15 +85,25 @@ class MagicianLite:
     # -- lifecycle -----------------------------------------------------------
 
     def connect(self) -> None:
-        """Resolve ``port="auto"``, connect the arm, and start its command queue."""
+        """Resolve ``port="auto"``, connect the arm, clear alarms, and start its queue.
+
+        Alarms are cleared here because an active controller alarm makes the arm
+        **silently refuse all PTP motion** (commands are accepted but nothing
+        moves); clearing on connect makes motion work out of the box.
+        """
         if self._port == "auto":
             ports = self.cmds.search() or []
             if not ports:
                 raise DobotConnectionError("no Dobot ports found via DobotLink")
             self.cmds.port_name = ports[0]["portName"]
         self.cmds.connect()
+        self.cmds.clear_alarms()
         self.cmds.queue_clear()
         self.cmds.queue_start()
+
+    def clear_alarms(self) -> Any:
+        """Clear all active controller alarms (unblocks motion). See :meth:`connect`."""
+        return self.cmds.clear_alarms()
 
     def disconnect(self) -> None:
         """Disconnect the arm and, if this instance owns it, close the client."""
