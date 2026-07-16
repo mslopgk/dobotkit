@@ -561,7 +561,7 @@ def test_context_manager_teardown_swallows_errors():
 
 
 def test_open_connects_verifies_and_owns_client(monkeypatch):
-    from dobotkit.go import client as client_mod
+    from dobotkit import link as link_mod
 
     created = {}
 
@@ -585,7 +585,7 @@ def test_open_connects_verifies_and_owns_client(monkeypatch):
         def notify(self, method, **params):
             self.fake.notify(method, **params)
 
-    monkeypatch.setattr(client_mod, "DobotLinkClient", StubClient)
+    monkeypatch.setattr(link_mod, "DobotLinkClient", StubClient)
     with MagicianGO.open(port_name="COM7", timeout=3.0) as go:
         assert go.port_name == "COM7"
         methods = go._client.fake.methods_called()

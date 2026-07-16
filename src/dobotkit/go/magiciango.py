@@ -105,7 +105,7 @@ class MagicianGO:
     """Ergonomic, typed wrapper over the DobotLink ``MagicianGO.*`` RPC surface.
 
     Args:
-        client: A connected :class:`~dobotkit.go.client.DobotLinkClient` (or any
+        client: A connected :class:`~dobotkit.link.DobotLinkClient` (or any
             object exposing ``call(method, **params)`` and
             ``notify(method, **params)``).
         port_name: The COM port DobotLink uses to reach the GO. Defaults to
@@ -145,7 +145,7 @@ class MagicianGO:
                 ...
             # <- line-trace OFF + emergency stop + socket closed, even on error
         """
-        from dobotkit.go.client import DobotLinkClient
+        from dobotkit.link import DobotLinkClient
 
         client = DobotLinkClient(host=host, port=port, timeout=timeout).connect()
         go = cls(client, port_name=port_name)
