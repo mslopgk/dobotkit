@@ -113,12 +113,16 @@ class DobotLinkClient:
 
     # ---- RPC ---------------------------------------------------------------
 
-    def call(self, method: str, **params: Any) -> Any:
+    def call(self, method: str, *, call_timeout: Optional[float] = None, **params: Any) -> Any:
         """Send a JSON-RPC request and block for the matching response.
 
         Args:
             method: RPC method name. Auto-prefixed with ``dobotlink.`` unless it
                 already starts with it.
+            call_timeout: Override the client's default ``timeout`` for just this
+                call. Keyword-only so it never collides with an RPC param that
+                happens to be named ``timeout`` (e.g. ``SetWAITCmd``). When
+                ``None`` (default), the client's ``timeout`` is used.
             **params: JSON-RPC ``params`` object.
 
         Returns:
@@ -127,11 +131,11 @@ class DobotLinkClient:
         Raises:
             DobotLinkError: if not connected, or if the response is a JSON-RPC
                 error.
-            DobotTimeoutError: if no matching response arrives within ``timeout``
-                (the device may be unresponsive or DobotLink lost the link).
-                ``timeout`` is a **total deadline** for the whole call, not a
-                per-read budget — a stream of unrelated notifications cannot
-                extend the wait indefinitely.
+            DobotTimeoutError: if no matching response arrives within the
+                effective timeout (the device may be unresponsive or DobotLink
+                lost the link). The timeout is a **total deadline** for the
+                whole call, not a per-read budget — a stream of unrelated
+                notifications cannot extend the wait indefinitely.
         """
         ws = self._require_connection()
         self._id += 1
@@ -144,12 +148,13 @@ class DobotLinkClient:
         }
         ws.send(json.dumps(payload))
 
-        deadline = time.monotonic() + self._timeout
+        eff = call_timeout if call_timeout is not None else self._timeout
+        deadline = time.monotonic() + eff
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise DobotTimeoutError(
-                    f"timed out after {self._timeout}s waiting for "
+                    f"timed out after {eff}s waiting for "
                     f"'{payload['method']}'. The device may be unresponsive or "
                     f"DobotLink lost the link."
                 )
@@ -157,7 +162,7 @@ class DobotLinkClient:
                 raw = ws.recv(timeout=remaining)
             except TimeoutError as exc:
                 raise DobotTimeoutError(
-                    f"timed out after {self._timeout}s waiting for "
+                    f"timed out after {eff}s waiting for "
                     f"'{payload['method']}'. The device may be unresponsive or "
                     f"DobotLink lost the link."
                 ) from exc

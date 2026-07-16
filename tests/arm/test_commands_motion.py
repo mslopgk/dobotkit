@@ -14,7 +14,17 @@ def test_set_ptp_cmd_maps_params_and_returns_index():
     assert idx == 12
     m, p = c.find_call("Magician.SetPTPCmd")
     assert p == {"portName": "COM8", "ptpMode": 2, "x": 220.0, "y": 0.0,
-                 "z": 40.0, "r": 0.0, "isQueued": True}
+                 "z": 40.0, "r": 0.0, "isQueued": True, "isWaitForFinish": False}
+
+
+def test_set_ptp_cmd_wait_finish_sends_is_wait_for_finish():
+    """``wait_finish=True`` sends ``isWaitForFinish=True`` so DobotLink blocks
+    until the move physically completes (matching DobotLab's behaviour)."""
+    c = FakeClient(results={"Magician.SetPTPCmd": {"queuedCmdIndex": 7}})
+    idx = _Cmds(c, "COM8").set_ptp_cmd(2, 220.0, 0.0, 40.0, 0.0, queued=True, wait_finish=True)
+    assert idx == 7
+    _, p = c.find_call("Magician.SetPTPCmd")
+    assert p["isWaitForFinish"] is True
 
 
 def test_get_pose_passthrough():

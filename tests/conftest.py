@@ -91,7 +91,10 @@ class FakeClient:
         self._result = result
         self._results = dict(results or {})
 
-    def call(self, method: str, **params: Any) -> Any:
+    def call(self, method: str, *, call_timeout: Optional[float] = None, **params: Any) -> Any:
+        # ``call_timeout`` mirrors ``DobotLinkClient.call``'s keyword-only
+        # per-call timeout override -- it is call metadata, not an RPC param,
+        # so it is deliberately excluded from the recorded ``params``.
         self.calls.append((method, params))
         if method in self._results:
             programmed = self._results[method]

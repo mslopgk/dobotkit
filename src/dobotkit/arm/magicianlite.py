@@ -12,9 +12,9 @@ Design highlights
 ------------------
 * **Queued motion.** Motion commands are always queued on-device;
   ``connect()`` clears and starts the queue so anything sent afterwards
-  actually executes. ``wait=True`` polls
-  :meth:`~dobotkit.arm.commands.ArmCommands.current_index` until the
-  returned queued-command index has executed.
+  actually executes. ``wait=True`` sends ``isWaitForFinish=true`` (matching
+  DobotLab) so DobotLink itself blocks until the move physically completes --
+  there is no client-side polling.
 * **Safe teardown.** Used as a context manager, ``__exit__`` always stops
   the queue and disconnects -- even if the ``with`` body raised -- and
   never suppresses the original exception.
@@ -23,13 +23,12 @@ Design highlights
 """
 from __future__ import annotations
 
-import time
 from typing import Any, Optional, Tuple
 
 from dobotkit.arm.commands import ArmCommands
 from dobotkit.arm.groups import EffectorGroup, IOGroup, SensorGroup
 from dobotkit.enums import PTPMode
-from dobotkit.exceptions import DobotConnectionError, DobotTimeoutError
+from dobotkit.exceptions import DobotConnectionError
 
 __all__ = ["MagicianLite"]
 
@@ -117,30 +116,6 @@ class MagicianLite:
         except Exception:  # pragma: no cover - teardown must not mask body errors
             pass
 
-    # -- internal motion -------------------------------------------------------
-
-    def _wait_for(
-        self, index: Optional[int], wait: bool, timeout_s: float = 30.0
-    ) -> Optional[int]:
-        """Poll ``current_index()`` until it reaches ``index``.
-
-        Raises:
-            DobotTimeoutError: if ``timeout_s`` elapses before the queue's
-                current index reaches ``index``.
-        """
-        if wait and index is not None:
-            deadline = time.monotonic() + timeout_s
-            while True:
-                if self.cmds.current_index() >= index:
-                    break
-                if time.monotonic() >= deadline:
-                    raise DobotTimeoutError(
-                        f"timed out after {timeout_s}s waiting for queued command "
-                        f"index {index} to complete"
-                    )
-                time.sleep(0.05)
-        return index
-
     # -- pose / speed ------------------------------------------------------
 
     def get_pose(self) -> Any:
@@ -157,9 +132,13 @@ class MagicianLite:
     def home(
         self, x: float = 200, y: float = 0, z: float = 0, r: float = 0, *, wait: bool = True
     ) -> Optional[int]:
-        """Run the homing routine, targeting the given pose."""
+        """Run the homing routine, targeting the given pose.
+
+        When ``wait`` is True (default), ``isWaitForFinish=true`` is sent so
+        DobotLink itself blocks until homing physically completes.
+        """
         self.cmds.set_home_params(x, y, z, r, queued=True)
-        return self._wait_for(self.cmds.set_home_cmd(queued=True), wait)
+        return self.cmds.set_home_cmd(queued=True, wait_finish=wait)
 
     # -- moves -----------------------------------------------------------------
 
@@ -167,15 +146,20 @@ class MagicianLite:
         self, x: float, y: float, z: float, r: float = 0, *,
         mode: int = PTPMode.MOVL_XYZ, wait: bool = False,
     ) -> Optional[int]:
-        """Move to an absolute Cartesian pose (defaults to a straight-line move)."""
-        return self._wait_for(self.cmds.set_ptp_cmd(mode, x, y, z, r, queued=True), wait)
+        """Move to an absolute Cartesian pose (defaults to a straight-line move).
+
+        When ``wait`` is True, ``isWaitForFinish=true`` is sent so DobotLink
+        itself blocks until the move physically completes; when False
+        (default), the move is only queued and this returns immediately.
+        """
+        return self.cmds.set_ptp_cmd(mode, x, y, z, r, queued=True, wait_finish=wait)
 
     def move_relative(
         self, dx: float = 0, dy: float = 0, dz: float = 0, dr: float = 0, *, wait: bool = False
     ) -> Optional[int]:
         """Move by a relative Cartesian offset (straight-line increment)."""
-        return self._wait_for(
-            self.cmds.set_ptp_cmd(PTPMode.MOVL_XYZ_INC, dx, dy, dz, dr, queued=True), wait
+        return self.cmds.set_ptp_cmd(
+            PTPMode.MOVL_XYZ_INC, dx, dy, dz, dr, queued=True, wait_finish=wait
         )
 
     # -- effector aliases --------------------------------------------------
@@ -199,19 +183,21 @@ class MagicianLite:
         travel above the source at ``z_safe``, descend to the source, turn
         the suction cup ON and settle, lift back to ``z_safe``, travel above
         the destination, descend, turn the suction cup OFF and settle, lift
-        back to ``z_safe``. Blocks until the final move completes.
+        back to ``z_safe``. Each move sends ``isWaitForFinish=true`` so
+        DobotLink blocks until it physically completes before the next step is
+        sent -- the steps execute sequentially without overlap, and the call
+        blocks until the final move completes.
         """
         sx, sy, sz = src
         dx, dy, dz = dst
         m = PTPMode.MOVL_XYZ
-        self.cmds.set_ptp_cmd(m, sx, sy, z_safe, 0)
-        self.cmds.set_ptp_cmd(m, sx, sy, sz, 0)
+        self.cmds.set_ptp_cmd(m, sx, sy, z_safe, 0, wait_finish=True)
+        self.cmds.set_ptp_cmd(m, sx, sy, sz, 0, wait_finish=True)
         self.cmds.set_suction_cup(True, True)
         self.cmds.set_wait_cmd(settle_ms)
-        self.cmds.set_ptp_cmd(m, sx, sy, z_safe, 0)
-        self.cmds.set_ptp_cmd(m, dx, dy, z_safe, 0)
-        self.cmds.set_ptp_cmd(m, dx, dy, dz, 0)
+        self.cmds.set_ptp_cmd(m, sx, sy, z_safe, 0, wait_finish=True)
+        self.cmds.set_ptp_cmd(m, dx, dy, z_safe, 0, wait_finish=True)
+        self.cmds.set_ptp_cmd(m, dx, dy, dz, 0, wait_finish=True)
         self.cmds.set_suction_cup(True, False)
         self.cmds.set_wait_cmd(settle_ms)
-        last = self.cmds.set_ptp_cmd(m, dx, dy, z_safe, 0)
-        self._wait_for(last, True)
+        self.cmds.set_ptp_cmd(m, dx, dy, z_safe, 0, wait_finish=True)

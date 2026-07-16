@@ -1,6 +1,6 @@
 """Shared base for the arm's DobotLink RPC command mixins."""
 from __future__ import annotations
-from typing import Any
+from typing import Any, Optional
 from dobotkit.link import DobotLinkClient
 
 
@@ -11,9 +11,9 @@ class _Base:
         self._client = client
         self.port_name = port_name
 
-    def _call(self, func: str, **params: Any) -> Any:
+    def _call(self, func: str, *, call_timeout: Optional[float] = None, **params: Any) -> Any:
         params["portName"] = self.port_name
-        return self._client.call(f"Magician.{func}", **params)
+        return self._client.call(f"Magician.{func}", call_timeout=call_timeout, **params)
 
     def _queued_index(self, resp: Any) -> int:
         return int(resp.get("queuedCmdIndex", 0)) if isinstance(resp, dict) else int(resp or 0)
