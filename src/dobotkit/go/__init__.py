@@ -9,10 +9,9 @@ Exported names:
 * :class:`~dobotkit.link.DobotLinkClient` -- the WebSocket JSON-RPC client
   (shared with the arm stack).
 * :class:`~dobotkit.go.magiciango.MagicianGO` -- the high-level GO wrapper
-  (continuous drive, sensors, camera, LED/buzzer, line-trace).
-* :class:`~dobotkit.go.navigation.PreciseMover` /
-  :class:`~dobotkit.go.navigation.WaypointNav` -- sensor-feedback closed-loop
-  motion and absolute mat-coordinate navigation.
+  (continuous drive, native sensors, MagicBox sensors/IO, LED/buzzer, alarms).
+* :class:`~dobotkit.go.navigation.PreciseMover` -- sensor-feedback closed-loop
+  motion (drive an exact distance / turn an exact angle).
 
 Names are resolved through a module-level :func:`__getattr__` (PEP 562) so that
 merely importing :mod:`dobotkit.go` stays light (no ``websockets`` import, no
@@ -26,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only, not imported at runtime
     from dobotkit.link import DobotLinkClient
     from .magiciango import MagicianGO
-    from .navigation import NavigationAborted, PreciseMover, WaypointNav
+    from .navigation import NavigationAborted, PreciseMover
 
 # Public name -> (submodule, attribute). Deferred to first access so importing
 # this subpackage never eagerly imports ``websockets``.
@@ -35,10 +34,9 @@ _LAZY = {
     "MagicianGO": ("dobotkit.go.magiciango", "MagicianGO"),
     "NavigationAborted": ("dobotkit.go.navigation", "NavigationAborted"),
     "PreciseMover": ("dobotkit.go.navigation", "PreciseMover"),
-    "WaypointNav": ("dobotkit.go.navigation", "WaypointNav"),
 }
 
-__all__ = ["DobotLinkClient", "MagicianGO", "NavigationAborted", "PreciseMover", "WaypointNav"]
+__all__ = ["DobotLinkClient", "MagicianGO", "NavigationAborted", "PreciseMover"]
 
 
 def __getattr__(name: str) -> Any:

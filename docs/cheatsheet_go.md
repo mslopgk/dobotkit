@@ -1,164 +1,112 @@
 # dobotkit GO API 치트시트 (LLM 접지용 1장)
 
 > Dobot Magician GO 제어의 전체 공개 표면. **여기 없는 메서드는 존재하지 않습니다.**
-> 하드웨어 검증 2026-07-02 · 확장 API 49종 추가 2026-07-04(전부 실기 미검증 — [검증 목록](VERIFICATION_NEEDED_ko.md)).
-> 자세한 예제: [quickstart-ko.md](quickstart-ko.md)
+> 2026-07-16 정리: 내장 폐루프/라인트레이싱/카메라/큐 제어/`WaypointNav`는 전부 제거, MagicBox 주변장치(`go.sensors`/`go.io`) 신규 추가(하드웨어 검증 2026-07-16).
+> 자세한 예제: [api/go.md](api/go.md)
 
 ## 진입점
 
 ```python
-from dobotkit.go import MagicianGO, PreciseMover, WaypointNav, NavigationAborted
+from dobotkit import MagicianGO
+# 또는: from dobotkit.go import MagicianGO, PreciseMover, NavigationAborted, DobotLinkClient
 
 with MagicianGO.open(port_name="COM5") as go:   # DobotLink 연결+링크검증, 종료 시 자동 안전정지
     ...
 ```
 
 전제: DobotLink.exe 실행 중(ws://localhost:9090) + GO 전원 ON. 직접 시리얼 경로 없음.
+종료 teardown: `emergency_stop()`(notify, 무대기) → 확인용 `stop()` → (open()이 소유한 경우) 소켓 close.
 
-## MagicianGO — 주행 (연속 속도; 정지 명령 전까지 계속 달림)
+## MagicianGO — 주행 (연속 속도뿐; 정지 명령 전까지 계속 달림)
 
 | 메서드 | 설명 |
 |---|---|
-| `move(x=0, y=0, r=0)` | `x+`전진 `y+`좌횡 `r+`반시계. 각 성분 ±30 클램프. 단위 미확정(8~30 실용) |
+| `move(x=0, y=0, r=0)` | `x+`전진 `y+`좌횡 `r+`반시계(CCW, 실기 확정 2026-07-03). 각 성분 ±30 클램프(NaN/inf→0). 단위 미확정(8~30 실용) |
 | `forward(v)` / `backward(v)` / `strafe(v)` / `spin(v)` | `move` 단축형 |
-| `move_direct(direction, speed)` | 방향 지정 주행(SetMoveSpeedDirect). `direction`(파이썬)→`dir`(RPC) 정수 enum — 0=전진 **추정**, 값 매핑 미확정. `speed` ±30 클램프. 일반 주행은 `forward`/`move` 우선 |
-| `drive_for(x=0, y=0, r=0, seconds=0.5)` | **권장**: 데드맨 주행 — seconds(≤5) 후 반드시 정지 |
+| `drive_for(x=0, y=0, r=0, seconds=0.5)` | **권장**: 데드맨 주행 — seconds(0~5s 클램프) 후 반드시 정지(finally) |
 | `stop()` | 정지(응답 대기) |
 | `emergency_stop()` | 무대기 정지(notify) — finally/인터럽트에서 안전 |
 
-## MagicianGO — 센서 (읽기 전용)
+정밀 이동(정확한 거리/각도)이 필요하면 **이 위에 없다** — 아래 `PreciseMover` 참고.
+
+## MagicianGO — 안전/연결
+
+| 메서드 | 설명 |
+|---|---|
+| `clearance_ok(x=0, y=0, r=0, threshold=20)` | 의도 방향 초음파 체크 → `(bool, 사유/거리)`. `None` 초음파는 막힘 취급 |
+| `connect(verify=True)` | `connect_robot()` + `battery()` 검증(권장 진입점) |
+| `connect_robot()` / `disconnect_robot()` | 저수준 연결/해제. 핸드셰이크 거짓 성공 가능 — `connect()` 권장 |
+| `search()` | 연결 가능 GO 탐색 — 응답 verbatim(구조 펌웨어 정의, 미확인) |
+
+## MagicianGO — 네이티브 센서 (읽기 전용)
 
 | 메서드 | 반환 |
 |---|---|
 | `battery()` | `{powerVoltage, powerPercentage}` — 링크 검증용 |
 | `ultrasonic()` | `{front, back, left, right}` cm, **40 상한 클램프**; 이상 응답 → `None`(=모르면 멈춘다) |
 | `ultrasonic_raw()` | 원시 응답(진단용) |
-| `odometer()` / `set_odometer(x, y, yaw)` | 월드프레임 'mm'/deg; set으로 영점화. ⚠️ mm 스케일 실측 의심(3~4배 과소집계 관측) — 캘리브레이션 전엔 상대 진행량으로만 |
-| `imu_angle()` | 전원 기준 절대각 `{yaw,...}` — 오도미터 yaw와 **혼용 금지**(24°+ 어긋남 실측) |
-| `imu_speed()` | 원시 IMU `{ax,ay,az,gx,gy,gz}` (가속도 g + 자이로 — 이름과 달리 각속도 yaw 아님, 실측) |
-| `clearance_ok(x=0, y=0, r=0, threshold=20)` | 의도 방향 초음파 체크 → `(bool, 사유/거리)` |
+| `odometer()` / `set_odometer(x, y, yaw)` | 월드프레임 mm/deg; set으로 영점화. ⚠️ mm 스케일 실측 의심(3~4배 과소집계 관측) |
+| `imu_angle()` | 전원 기준 절대각 `{yaw,...}` — 오도미터 yaw와 **혼용 금지** |
 
-## MagicianGO — 라인 트레이싱
+## MagicianGO — 진단/알람/MagicBox 상태
 
-| 메서드 | 설명 |
-|---|---|
-| `trace_speed(v)` | 순찰 속도 (공식값 20) |
-| `trace_pid(p, i, d)` | 순찰 PID (공식값 0.5, 0, 0.5 — 50처럼 크면 요동·이탈 실측) |
-| `auto_trace(on)` | 펌웨어 순찰 ON/OFF — 내부적으로 `isTrace=int`+`type=0` (검증된 포맷) |
-| `trace_angle()` | `{"angle": int, "count": int}` — `count==0`=라인 없음. 중앙값 기체별 실측(참조 ≈245) |
-| `line_error(center)` | `angle - center` 또는 라인 없으면 `None`. P제어: `move(x=v, r=-kp*err)` (부호 기체별 확인) |
+`get_alarm_info()` → `{warning:[...]}` · `clean_alarm_info()` ·
+`running_state()` → `{runningState:int}` · `stall_protection()` → `{isHappened:int}` ·
+`off_ground()` → `{isHappened:int}` ·
+`magic_box_mode()` / `magic_box_num()` — ⚠️ 이름과 달리 `MagicianGO.*` 네임스페이스(MagicBox 자체 RPC 아님).
 
-## MagicianGO — 카메라/출력/기타
+## MagicBox 주변장치 — `go.sensors` / `go.io` (🆕 신규, 하드웨어 검증 2026-07-16)
 
-`car_camera_obj()` `arm_camera_obj()` `arm_camera_tag()` (탐지 결과만 — **원시 영상 접근 불가**,
-ARM 캠은 기체에 따라 405 비활성) ·
-`rgb(number, effect, r, g, b, cycle, counts)` — **cycle=1, counts>=1 필수**(0이면 희미/무점등, 실측), effect 0=소등/1~3=점등 ·
-`buzzer(index=5, tone=0, beat=0)` — 이 기본값이 깔끔한 '삑'(DobotLab 동일, 실측) ·
-`search()` → 응답 verbatim 반환(구조 추정 `[{description, portName, status}]` — **실측 미확인**, 펌웨어 정의·비정규화) ·
-`connect()` `connect_robot()`(핸드셰이크 거짓 성공 가능 — 읽기 검증 필요, `connect()` 권장) `disconnect_robot()` `set_running_mode(mode)`
+`MagicianGO`로 연결 한 번이면 충분 — `go.sensors`/`go.io`는 같은 연결 위에서 `MagicBox.*` RPC를 호출 (별도 MagicBox 연결 단계 없음; `MagicBox.ConnectDobot`을 직접 호출하면 GO가 오프라인됨 — 실기 확인).
 
-## ⚠️ 사용 금지 (행 HANG 실측 — 큐 명령)
+**두 가지 주소 체계 (혼동 주의)**: `adc`/`di`/`set_do`/`get_di`/`get_adc`/`set_pwm`/`set_multiplexing`은 **EIO 핀(1..26)**, `color`/`infrared`/`distance`/`temp`/`light`/`rgb`는 **Grove 커넥터(1..6)**.
 
-`unsafe_rotate` `unsafe_move_dist` `unsafe_arc_rad` `unsafe_arc_cent`
-`unsafe_increment_closed_loop` — 완료 콜백이 오지 않아 **멈춤(HANG)**.
-구명칭(`rotate` 등)은 UserWarning을 내는 폐기 예정 별칭.
-`unsafe_move_pos`(신규 2026-07-04)도 동일 큐드+대기 계열로 확정 — HANG 추정, 미검증.
-예외: `coord_closed_loop(is_enable, angle)`(SetCoordClosedLoop)은 `_WAIT` 미전송이라
-완료 대기(HANG) 계열이 **아님** — 단 실효 동작 자체는 미검증.
-→ 정밀 이동은 대신 아래 내비게이션 계층 사용.
-
-## 확장 API 49종 (전부 미검증 2026-07-04 — 와이어 스펙만 채굴 교차검증)
-
-> 시그니처는 공식 소스 3중 교차검증(DobotEDU 래퍼+CHM+DobotLink 플러그인)이나 **실기 실행 0회**.
-> 검증 절차·순서: [VERIFICATION_NEEDED_ko.md](VERIFICATION_NEEDED_ko.md) C절.
-
-### 진단·조회 (읽기 전용, 미검증 2026-07-04)
-
-| 메서드 | RPC | 반환 |
+| 그룹 | 메서드 | 비고 |
 |---|---|---|
-| `get_alarm_info()` | GetAlarmInfo | `{warning: [...]}` |
-| `clean_alarm_info()` | CleanAlarmInfo | result true |
-| `running_state()` | GetRunningState | `{runningState:int}` 추정 — 방어적 읽기 |
-| `stall_protection()` | GetStallProtection | `{isHappened:int}` (모터 스톨) |
-| `off_ground()` | GetOffGround | `{isHappened:int}` (들림 감지) |
-| `get_move_speed()` | GetMoveSpeed | `{x,y,r}` (cm/s, deg/s) |
-| `get_running_mode()` | GetRunningMode | `{runningMode:int}` 추정(0 NORMAL/1 SAFE) — 방어적 읽기 |
+| `go.sensors` | `adc(eio)` `di(eio)` | EIO 핀. 전부 guarded → `None`+`RuntimeWarning` |
+| `go.sensors` | `color(port)` `infrared(port)` `distance(port)` `temp(port)` `light(port)` `rgb(port, value)` | Grove 커넥터. 전부 guarded |
+| `go.io` | `set_do(eio, level)` `set_pwm(eio, frequency, duty)` `set_multiplexing(eio, multiplex)` | EIO 핀. **guard 없음** — 실패 시 그대로 예외 |
+| `go.io` | `get_di(eio)` `get_adc(eio)` | EIO 핀. guarded → `None`+`RuntimeWarning` |
 
-### 트레이스 확장 (미검증 2026-07-04)
-
-| 메서드 | 설명 |
-|---|---|
-| `firmware_trace_angle(**params)` | GetTraceAngle — ⚠️ **와이어 존재 미확인**(패스스루, unconfirmed). 기존 `trace_angle()`(=GetCarCameraAngle)과 별개 — 의미 대조 필요 |
-| `set_trace_line_info(lineInfo)` | SetTraceLineInfo — `lineInfo:int` (값 의미 미확정) |
-
-### 절대주행 (⚠️ 모션, 미검증 2026-07-04)
-
-| 메서드 | 설명 |
-|---|---|
-| `unsafe_move_pos(x, y, s)` | SetMovePos — 목표 (x,y) cm로 이동, 속도 s(0-100 cm/s). **큐드+대기 확정 → HANG 추정(사용 금지 목록)** |
-| `move_speed_time(time, x, y, r, isAck=False)` | SetMoveSpeedTime — time초 동안 속도 (x,y cm/s, r deg/s). x/y/r **±30 클램프**, time **0~5초 클램프**(펌웨어 주행이 스크립트 크래시를 살아남으므로). 비큐드 확정(HANG 계열 아님), 데드맨 대체 후보 |
-| `set_origin_point(enable)` | SetOriginPoint — 원점 사용 1/미사용 0. 비큐드. 실효 의미 미확정 |
-
-### 카메라 확장 (미검증 2026-07-04; count=0 시 배열 키 부재 가능 — 방어적 읽기)
-
-| 메서드 | RPC | 반환/인자 |
-|---|---|---|
-| `car_camera_color()` | GetCarCameraColor | `{count(≤5), color_obj:[{x,y,w,h,id}]}` |
-| `car_camera_tag()` | GetCarCameraTag | `{count(≤5), aptag_obj:[{x,y,w,h,id,rot}]}` |
-| `get_car_camera_model()` / `set_car_camera_model(i)` | Get/SetCarCameraRunModel | `{runModelIndex:int}` / runModelIndex |
-| `get_car_camera_calibration_mode()` / `set_car_camera_calibration_mode(i)` | Get/SetCarCameraCalibrationMode | `{isEnableCali:int}` 추정 / 1 진입·0 종료 |
-| `camera_calibration_data(april_list, device_list)` | GetCameraCalibrationData | 9점 JSON 문자열 2개 필수 → `{data:"max_x_err:..."}` |
-| `arm_camera_color()` / `arm_camera_angle()` | GetArmCameraColor/Angle | color_obj / `{angle:int}` (ARM 캠 405 기체 존재) |
-| `get_arm_camera_model()` / `set_arm_camera_model(i)` | Get/SetArmCameraRunModel | Car와 동일 |
-| `get_arm_camera_calibration_mode()` / `set_arm_camera_calibration_mode(i)` | Get/SetArmCameraCalibrationMode | Car와 동일 |
-
-### 큐 제어 (미검증 2026-07-04)
-
-`clean_cmd_queue()` `cmd_queue_start()` `cmd_queue_stop()` `cmd_queue_force_stop()`(공식 비상정지 시퀀스 일부) ·
-`queued_cmd_current_index()` → `{queueCmdCurrentIndex:int}`('queue' 철자 주의) ·
-`cmd_queue_available_space()` → `{space:int}`
-
-### MagicBox / 상태 (미검증 2026-07-04)
-
-| 메서드 | RPC(네임스페이스) | 설명 |
-|---|---|---|
-| `magic_box_mode()` / `magic_box_num()` | GetMagicBoxMode/Num (MagicianGO) | `{mode:int}` / `{num:int}` 추정 — 방어적 읽기 |
-| `stop_point_state()` | GetStopPointState (**MagicBox**) | `{result:bool}` 도착·정지 시 true |
-| `set_stop_point_param(scopeErr, stopErr)` | SetStopPointParam (**MagicBox**) | 진입범위(기본 40)/정지정밀도(기본 2) |
-| `set_stop_point_server(PointX, PointY)` | SetStopPointServer (**MagicBox**) | 정지점 좌표(인자명 대문자 P 그대로) — ⚠️ 단위(cm/mm) 미확정, 작은 값으로만 |
-| `set_running_state(**params)` | SetRunningState (MagicianGO) | **미확정 패스스루**(`runningState:int` 추정) |
-
-### 출력·디바이스 (미검증 2026-07-04)
-
-`set_light_prompt(index)` (0없음/1 USB/2 저전량/3 핸들/4 스크립트) ·
-`product_name()` → `{productName}`("MagicianGo"면 유효 디바이스) ·
-`device_fw_software_version()` / `device_fw_hardware_version()` → `{majorVersionNum, secondVersionNum, revisionVersionNum, previousVersionNum}`(방어적 읽기) ·
-`device_id()` → `{deviceID:[int]}` · `get_device_name()` / `set_device_name(deviceName)` ·
-`get_device_sn()` / `set_device_sn(deviceSN)`(⚠️ SN 덮어쓰기 원복 불가 위험) ·
-`device_time()` → `{gSystick, passtime:"hh:mm:ss.z"}` ·
-`device_reboot()` — ⚠️ **즉시 재부팅·연결 끊김** · `heartbeat()` — keepalive(공식 JS: 2000ms 타임아웃×3회 실패 시 끊김 처리)
-
-## PreciseMover / WaypointNav — 안전 내비게이션 (권장)
+- **guarded** = MagicBox/센서 미부착 시 예외 대신 `None` + `RuntimeWarning`("주변장치 응답이 없습니다..."); 진짜 연결 오류는 그대로 예외.
+- ✅ **실기 검증(2026-07-16)**: 교구 세트 가변저항은 Grove 커넥터 **4**번에 꽂혀 있지만 읽을 땐 EIO 핀 **22**번 — `go.sensors.adc(22)` → ~426 (0..4095), 노브 돌리면 변화. 멀티플렉스 값 `4` = ADC 모드.
 
 ```python
-mover = PreciseMover(go)                       # max_speed=30, min_speed=8
-mover.goto_distance(300, speed=20)             # +300 mm 전진 (mm 단위!)
-mover.turn_degrees(90, speed=20)               # 제자리 90° 반시계 — CCW 부호 실기 확정, 오차 ~1.5° 실측
-
-nav = WaypointNav(go)
-nav.set_start(20, 20, heading_deg=0)           # 필수 — 안 하면 go_to가 RuntimeError
-nav.pose_cm()                                  # {"x_cm", "y_cm", "heading_deg"}
-nav.go_to(100, 80, raise_on_abort=True)        # cm 단위! 실패 시 NavigationAborted
+value = go.sensors.adc(22)        # Grove 4번 = EIO 22번 핀 (실기 검증)
+color = go.sensors.color(port=1)  # Grove 1번 컬러 센서, 없으면 None+경고
+go.io.set_do(5, 1)                # EIO 5번 핀 출력 High (guard 없음)
 ```
 
-- 클리어런스 사전체크·벽시계 타임아웃·try/finally 비상정지 **전부 내장**.
-- 결과 dict: `{target, achieved, error, timed_out, aborted[, reason]}` /
-  go_to: `{start, target, final, residual_cm, iters, legs, arrived}`.
-- `raise_on_abort=True`를 주면 실패가 예외(`NavigationAborted`, `.result` 보유)로 승격 — 교육 코드 권장.
-- **단위 경계**: PreciseMover=mm, WaypointNav=cm.
+## MagicianGO — 출력
+
+`rgb(number, effect, r, g, b, cycle, counts)` — **cycle=1, counts>=1 필수**(0이면 희미/무점등, 실측), effect 0=소등/1~3=점등, number는 int 1~5 / `LEDChannel` / `"LED_1".."LED_4","LED_ALL"` ·
+`buzzer(index=5, tone=0, beat=0)` — 이 기본값이 깔끔한 '삑'(DobotLab 동일, 실측).
+
+## 제거됨 (더 이상 존재하지 않음 — 지어내지 말 것)
+
+내장 폐루프(`rotate`/`move_dist`/`arc_rad`/`arc_cent`/`increment_closed_loop`, `unsafe_` 변형 포함), `move_direct`, `move_speed_time`, `set_running_mode`, `set_origin_point` · 라인트레이싱(`auto_trace`/`trace_speed`/`trace_pid`/`trace_angle`/`line_error` 등) · 카메라(`car_camera_*`/`arm_camera_*`) · 큐 제어(`clean_cmd_queue` 등) · Stop-Point(`stop_point_state` 등) · 디바이스 관리(`product_name`/`device_*`/`heartbeat` 등) · `imu_speed`/`get_move_speed`/`get_running_mode` · **`WaypointNav`** 클래스 전체.
+(내장 폐루프는 이 기체에서 완료 콜백이 안 와 HANG하기 때문에 제거 — 정밀 이동은 아래 `PreciseMover`로 직접 구성.)
+
+## `PreciseMover` — 정밀 이동(유일한 폐루프 경로, 연속 move + 센서 피드백)
+
+```python
+from dobotkit.go.navigation import PreciseMover, NavigationAborted
+
+mover = PreciseMover(go, max_speed=30, min_speed=8)
+res = mover.goto_distance(300, speed=20, axis="x", threshold=20, timeout_s=8.0)
+# {target, achieved, error, axis, timed_out, aborted[, reason]}  -- mm 단위!
+res = mover.turn_degrees(90, speed=20, threshold=20, timeout_s=8.0)
+# {target, achieved, error, timed_out, aborted[, reason]}  -- r+ = CCW, 실기 확정, 오차 ~1.5도
+
+mover.goto_distance(300, raise_on_abort=True)   # 실패 시 NavigationAborted(.result 보유)
+```
+
+- 클리어런스 사전체크·0.25초마다 재체크·1초 무진행 스톨가드·절대 타임아웃·try/finally 비상정지 **전부 내장**.
+- `aborted`(막힘/스톨)·`timed_out`은 정상 흐름 — 예외 아님(`raise_on_abort=True`가 아닌 한).
+- 단위: **mm**(오도미터/명령 거리). 회전량은 IMU yaw, 병진 진행은 오도미터로 측정 — 두 yaw 소스 혼용 금지.
 
 ## 안전 3원칙
 
 1. 항상 `with MagicianGO.open(...) as go:` — 크래시에도 자동 정지.
-2. 주행 루프는 유한 루프(`for`)만. 한 번의 이동은 `drive_for`.
-3. 센서를 모르면 멈춘다 — `ultrasonic() is None`도 정지 사유.
+2. 정밀 이동은 `PreciseMover`만 — 내장 폐루프는 없음(HANG 위험으로 제거됨).
+3. 센서를 모르면 멈춘다 — `ultrasonic() is None`, `go.sensors.*`의 `None`도 정지/분기 사유.

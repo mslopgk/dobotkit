@@ -17,12 +17,11 @@ def test_arm_subpackage_exports():
 
 
 def test_go_subpackage_exports():
-    from dobotkit.go import DobotLinkClient, MagicianGO, PreciseMover, WaypointNav
+    from dobotkit.go import DobotLinkClient, MagicianGO, PreciseMover
 
     assert DobotLinkClient.__name__ == "DobotLinkClient"
     assert MagicianGO.__name__ == "MagicianGO"
     assert PreciseMover.__name__ == "PreciseMover"
-    assert WaypointNav.__name__ == "WaypointNav"
 
 
 def test_arm_unknown_attr_raises():

@@ -39,6 +39,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `io.set_do`/`set_pwm`/`set_multiplexing`) and a genuine
   `DobotConnectionError` are **not** swallowed.
 
+- **The Magician GO stack is trimmed to a clean core and now reads its MagicBox
+  peripherals.** `MagicianGO` keeps continuous drive (`move`/`forward`/
+  `backward`/`strafe`/`spin`/`stop`/`drive_for`/`emergency_stop`),
+  `clearance_ok`, native sensors (`ultrasonic`/`ultrasonic_raw`/`odometer`/
+  `set_odometer`/`battery`/`imu_angle`), `rgb`/`buzzer`, alarms/state
+  (`get_alarm_info`/`clean_alarm_info`/`running_state`/`stall_protection`/
+  `off_ground`), and `magic_box_mode`/`magic_box_num`. **New:** `go.sensors`
+  (`GoSensorGroup`) and `go.io` (`GoIOGroup`) read the GO's MagicBox on the
+  DobotLink `MagicBox.*` namespace over the *same* `MagicianGO` connection —
+  ADC/DI/DO/PWM address an **EIO pin (1..26)**, color/infrared/Seeed address a
+  **Grove connector (1..6)** — and every `go.sensors` read degrades to `None` +
+  a `RuntimeWarning` when the MagicBox/sensor is absent (hardware-verified
+  2026-07-16: the teaching-kit potentiometer on Grove connector 4 reads on EIO
+  pin 22 via `go.sensors.adc(22)`).
+
+  Removed (BREAKING): all firmware closed-loop / queued motion
+  (`rotate`/`move_dist`/`arc_rad`/`arc_cent`/`coord_closed_loop`/
+  `increment_closed_loop` and their `unsafe_` variants, `unsafe_move_pos`,
+  `move_speed_time`, `set_origin_point`, `move_direct`, `set_running_mode`);
+  line-tracing (`auto_trace`/`trace_speed`/`trace_pid`/`trace_angle`/
+  `line_error`/`firmware_trace_angle`/`set_trace_line_info`); cameras
+  (`car_camera_*`/`arm_camera_*`/`camera_calibration_data`); firmware
+  command-queue internals; MagicBox stop-point RPCs; device-management RPCs
+  (`product_name`, fw versions, `device_id`, name/SN, `device_time`,
+  `device_reboot`, `heartbeat`); `set_running_state`; `set_light_prompt`;
+  `imu_speed`; `get_move_speed`; `get_running_mode`. The `WaypointNav`
+  navigation class is removed — `PreciseMover` (continuous move + odometer/IMU
+  feedback) remains for precise motion. `MagicianGO.__exit__` teardown is
+  simplified to `emergency_stop` + a confirming `stop` (+ socket close when it
+  owns the client). Examples `go_line_trace.py`/`go_waypoint_nav.py` are
+  removed; `go_magicbox_sensor.py` is added.
+
 ### Fixed
 
 - **`home()` always queues `SetHOMEParams`/`SetHOMECmd`.** Previously

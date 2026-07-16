@@ -24,6 +24,10 @@ packages = ["src/dobotkit"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+# Put the src/ layout first on sys.path so `pytest` resolves the real package
+# even when run from the repo root (an unrelated nested `dobotkit/` dir would
+# otherwise shadow it as a namespace package).
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100

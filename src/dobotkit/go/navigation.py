@@ -8,27 +8,17 @@ the other hand, works reliably. This module therefore builds its *own* closed
 loop out of continuous ``move`` plus odometer/IMU feedback, stopping the car
 the moment a target is reached.
 
-Two layers, mirroring the proven reference implementations
-(``magiciango_go/precise_move.py`` and ``waypoint_nav.py``):
+:class:`PreciseMover` mirrors the proven reference implementation
+(``magiciango_go/precise_move.py``): straight-line / strafe / in-place-turn
+primitives that drive at a capped, near-target-decelerated speed until the
+measured travel (or turn) reaches the target, then stop.
 
-* :class:`PreciseMover` — straight-line / strafe / in-place-turn primitives that
-  drive at a capped, near-target-decelerated speed until the measured travel (or
-  turn) reaches the target, then stop.
-* :class:`WaypointNav` — absolute mat-coordinate waypoint navigation layered on
-  top of :class:`PreciseMover`: zero the odometer to the mat frame, then
-  repeatedly measure pose, face the target bearing, and drive to it.
-
-Heading-source rule (research doc §2.3 / §3.5 — they have **different**
-references, so they must not be mixed):
-
-* **"Which way am I facing"** (the current absolute mat heading, used by
-  :meth:`WaypointNav.pose_cm`) is read from the **odometer yaw**, because
-  :meth:`MagicianGO.set_odometer` is the only thing that zeroes a yaw source to
-  the mat frame.
-* **"How far have I turned"** (the rotation amount measured inside
-  :meth:`PreciseMover.turn_degrees`) is read from the **IMU yaw** delta: it is a
-  power-on-referenced absolute angle whose *relative* change is stable and
-  responsive over a short turn, and it needs no mat-frame zero.
+Heading-source rule (research doc §2.3 / §3.5): **"how far have I turned"** (the
+rotation amount measured inside :meth:`PreciseMover.turn_degrees`) is read from
+the **IMU yaw** delta — a power-on-referenced absolute angle whose *relative*
+change is stable and responsive over a short turn, and it needs no mat-frame
+zero. (For absolute mat *heading* you would instead zero the odometer yaw with
+:meth:`MagicianGO.set_odometer`; the two references must not be mixed.)
 
 Safety (research doc §8 — a past open-loop test drove into a wall and tripped
 the power, so this matters):
@@ -47,12 +37,12 @@ the power, so this matters):
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from dobotkit.exceptions import DobotError
-from dobotkit.go.geometry import bearing, clamp_speed, cm_to_mm, mm_to_cm, yaw_delta
+from dobotkit.go.geometry import clamp_speed, yaw_delta
 
-__all__ = ["NavigationAborted", "PreciseMover", "WaypointNav"]
+__all__ = ["NavigationAborted", "PreciseMover"]
 
 
 class NavigationAborted(DobotError, RuntimeError):
@@ -372,219 +362,3 @@ class PreciseMover:
         finally:
             self._settle_stop()
         return _finish(result, raise_on_abort)
-
-
-class WaypointNav:
-    """Absolute mat-coordinate waypoint navigation layered on :class:`PreciseMover`.
-
-    The GO odometer ``(x, y, yaw)`` is a planar pose frozen at the last
-    :meth:`~dobotkit.go.magiciango.MagicianGO.set_odometer` call, so zeroing it
-    to a known mat start point makes the odometer read out *mat coordinates*.
-    Navigation then drives toward absolute mat ``(x, y)`` targets.
-
-    Coordinate / unit convention (applied consistently throughout):
-
-    * Mat coordinates are centimetres (same as the SDK position values); the
-      underlying :class:`PreciseMover` primitives work in millimetres, so the
-      cm<->mm conversion (x10 / /10) happens **only** here.
-    * ``x+`` = forward (the direction heading ``0deg`` points), ``y+`` = strafe
-      left (odometer convention).
-    * ``heading_deg`` is the absolute mat bearing: ``0deg`` faces ``+X``,
-      counter-clockwise positive — matching ``atan2(dy, dx)`` and ``r+`` = CCW.
-    * Target bearing = ``atan2(dy, dx)`` deg; turn amount = ``yaw_delta(bearing,
-      current_heading)``.
-
-    Args:
-        go: A :class:`~dobotkit.go.magiciango.MagicianGO` (or compatible object).
-        mover: An optional pre-built :class:`PreciseMover`; one is created
-            wrapping ``go`` if omitted.
-    """
-
-    def __init__(self, go: GoLike, mover: Optional[PreciseMover] = None) -> None:
-        self.go = go
-        self.mover = mover if mover is not None else PreciseMover(go)
-        self._heading = 0.0   # last recorded mat heading (deg)
-        self._started = False  # set_start() called? go_to() refuses to run before it
-
-    # ---- start pose: zero the odometer to mat coordinates ------------------
-
-    def set_start(self, x_cm: float, y_cm: float, heading_deg: float = 0.0) -> Dict[str, float]:
-        """Declare the GO's current mat pose as ``(x_cm, y_cm, heading_deg)``.
-
-        Sets the odometer to this value (cm -> mm) so subsequent
-        :meth:`pose_cm` reads return mat coordinates, and seeds the yaw with the
-        heading. Note: these values must match the GO's *actual* position/heading
-        on the mat for navigation to be correct (human calibration required).
-
-        Returns:
-            ``{x_cm, y_cm, heading_deg}`` echoing the declared start pose.
-        """
-        self.go.set_odometer(cm_to_mm(x_cm), cm_to_mm(y_cm), float(heading_deg))
-        self._heading = float(heading_deg)
-        self._started = True
-        return {
-            "x_cm": float(x_cm),
-            "y_cm": float(y_cm),
-            "heading_deg": float(heading_deg),
-        }
-
-    # ---- current pose (cm) -------------------------------------------------
-
-    def pose_cm(self) -> Dict[str, float]:
-        """Return the current mat pose ``{x_cm, y_cm, heading_deg}``.
-
-        Converts the odometer ``x``/``y`` (mm) to cm. The heading is the
-        **odometer yaw** — the only source zeroed to the mat frame by
-        :meth:`set_start`. The IMU yaw is a power-on-referenced absolute angle
-        unrelated to ``set_start`` (measured >=24deg off in practice) and must
-        **not** be used here.
-        """
-        odo = self.go.odometer()
-        heading = odo.get("yaw", self._heading)
-        self._heading = float(heading)
-        return {
-            "x_cm": mm_to_cm(odo["x"]),
-            "y_cm": mm_to_cm(odo["y"]),
-            "heading_deg": float(heading),
-        }
-
-    # ---- rotate to an absolute heading -------------------------------------
-
-    def face(
-        self,
-        heading_deg: float,
-        speed: float = 25,
-        threshold: float = 20,
-        timeout_s: float = 8.0,
-    ) -> Dict[str, Any]:
-        """Turn in place to face the absolute mat heading ``heading_deg``.
-
-        The shortest turn from the current heading is
-        ``yaw_delta(heading_deg, current)``, executed via
-        :meth:`PreciseMover.turn_degrees`.
-
-        Returns:
-            The :meth:`PreciseMover.turn_degrees` result dict plus
-            ``{bearing, from_heading}`` — ``bearing`` is the requested absolute
-            heading, ``from_heading`` the heading when the turn started.
-        """
-        cur = self.pose_cm()["heading_deg"]
-        turn = yaw_delta(heading_deg, cur)
-        res = self.mover.turn_degrees(
-            turn, speed=speed, threshold=threshold, timeout_s=timeout_s
-        )
-        res["bearing"] = float(heading_deg)
-        res["from_heading"] = float(cur)
-        return res
-
-    # ---- drive to an absolute mat coordinate -------------------------------
-
-    def go_to(
-        self,
-        x_cm: float,
-        y_cm: float,
-        speed: float = 25,
-        arrive_tol_cm: float = 2.0,
-        max_iters: int = 3,
-        threshold: float = 20,
-        turn_timeout_s: float = 8.0,
-        move_timeout_s: float = 8.0,
-        raise_on_abort: bool = False,
-    ) -> Dict[str, Any]:
-        """Drive to the absolute mat coordinate ``(x_cm, y_cm)``.
-
-        Each iteration: measure the current pose, compute ``dx, dy`` (cm) to the
-        target, turn to the bearing ``atan2(dy, dx)``, then drive that distance
-        (converted to mm) along ``axis="x"``. Stops when within ``arrive_tol_cm``
-        or after ``max_iters`` (re-measuring each leg corrects odometer drift and
-        turn error).
-
-        Requires :meth:`set_start` first — without it the odometer is in an
-        arbitrary frame and the car would drive somewhere unrelated to the mat.
-
-        Args:
-            raise_on_abort: When ``True``, raise :class:`NavigationAborted` if
-                the target is not reached (clearance-blocked, timed out, or out
-                of iterations) instead of returning ``arrived=False``.
-
-        Returns:
-            ``{start, target, final, residual_cm, iters, legs, arrived}`` where
-            ``legs`` is a per-iteration list of
-            ``{iter, bearing, dist_cm, turn, move}``.
-
-        Raises:
-            RuntimeError: if called before :meth:`set_start`.
-            NavigationAborted: if ``raise_on_abort`` and the target was not reached.
-        """
-        if not self._started:
-            raise RuntimeError(
-                "WaypointNav.go_to() called before set_start(): the odometer is "
-                "not zeroed to the mat frame, so navigation would be meaningless. "
-                "set_start(x_cm, y_cm, heading_deg) 로 매트 좌표를 영점화한 뒤 사용하세요."
-            )
-        start = self.pose_cm()
-        target = {"x_cm": float(x_cm), "y_cm": float(y_cm)}
-        legs = []
-        arrived = False
-        iters = 0
-
-        for i in range(max(1, int(max_iters))):
-            iters = i + 1
-            cur = self.pose_cm()
-            dx = x_cm - cur["x_cm"]
-            dy = y_cm - cur["y_cm"]
-            dist_cm = (dx * dx + dy * dy) ** 0.5
-            if dist_cm <= arrive_tol_cm:
-                arrived = True
-                break
-
-            target_bearing = bearing(dx, dy)
-            turn_res = self.face(
-                target_bearing, speed=speed, threshold=threshold, timeout_s=turn_timeout_s
-            )
-            # cm -> mm for the straight-line primitive (x+ = forward).
-            move_res = self.mover.goto_distance(
-                cm_to_mm(dist_cm),
-                speed=speed,
-                axis="x",
-                threshold=threshold,
-                timeout_s=move_timeout_s,
-            )
-            legs.append(
-                {
-                    "iter": iters,
-                    "bearing": target_bearing,
-                    "dist_cm": dist_cm,
-                    "turn": turn_res,
-                    "move": move_res,
-                }
-            )
-
-            # If the path is clearance-blocked, further attempts are pointless.
-            if move_res.get("aborted") or turn_res.get("aborted"):
-                break
-
-        final = self.pose_cm()
-        residual = (
-            (final["x_cm"] - x_cm) ** 2 + (final["y_cm"] - y_cm) ** 2
-        ) ** 0.5
-        if residual <= arrive_tol_cm:
-            arrived = True
-        out = {
-            "start": start,
-            "target": target,
-            "final": final,
-            "residual_cm": residual,
-            "iters": iters,
-            "legs": legs,
-            "arrived": arrived,
-        }
-        if raise_on_abort and not arrived:
-            out["aborted"] = True
-            out.setdefault(
-                "reason",
-                f"target not reached (residual {residual:.1f} cm > "
-                f"tolerance {arrive_tol_cm} cm after {iters} iteration(s))",
-            )
-            raise NavigationAborted(out)
-        return out

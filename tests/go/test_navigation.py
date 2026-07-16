@@ -1,4 +1,4 @@
-"""Tests for ``dobotkit.go.navigation`` — ``PreciseMover`` and ``WaypointNav``.
+"""Tests for ``dobotkit.go.navigation`` — ``PreciseMover`` (feedback motion).
 
 These exercise the software closed loop (continuous ``move`` + odometer/IMU
 feedback) without any socket or real device, using the ``SimulatedGo`` double
@@ -23,7 +23,7 @@ within tolerance; a clearance-blocked direction returns ``aborted=True`` with a
 from __future__ import annotations
 
 import dobotkit.go.navigation as navigation
-from dobotkit.go.navigation import PreciseMover, WaypointNav
+from dobotkit.go.navigation import PreciseMover
 
 from .conftest import SimulatedGo
 
@@ -242,141 +242,6 @@ def test_turn_degrees_handles_yaw_wraparound(monkeypatch):
     assert 30.0 <= res["achieved"] < 360.0
 
 
-# ==========================================================================
-# WaypointNav: set_start / pose_cm
-# ==========================================================================
-def test_set_start_zeros_odometer_to_mat_cm(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    go = SimulatedGo()
-    nav = WaypointNav(go)
-
-    echoed = nav.set_start(100, 48, heading_deg=0.0)
-
-    assert echoed == {"x_cm": 100.0, "y_cm": 48.0, "heading_deg": 0.0}
-    # Odometer was set in mm (cm * 10), yaw in degrees.
-    assert go.set_odometer_calls[-1] == (1000.0, 480.0, 0.0)
-
-
-def test_pose_cm_converts_mm_to_cm(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    go = SimulatedGo(x=1000.0, y=480.0, yaw=0.0)  # mm
-    nav = WaypointNav(go)
-
-    pose = nav.pose_cm()
-
-    assert pose["x_cm"] == 100.0
-    assert pose["y_cm"] == 48.0
-    assert pose["heading_deg"] == 0.0
-
-
-# ==========================================================================
-# WaypointNav.face
-# ==========================================================================
-def test_face_turns_to_absolute_heading(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    go = SimulatedGo(yaw=0.0, deg_per_tick=1.0)
-    nav = WaypointNav(go)
-
-    res = nav.face(90, speed=20, timeout_s=8.0)
-
-    # face() augments the turn result with the requested + starting headings.
-    assert res["bearing"] == 90.0
-    assert res["from_heading"] == 0.0
-    # Turned ~90 deg CCW (positive vr commanded).
-    assert any(vr > 0 for _vx, _vy, vr in go.moves)
-    assert res["timed_out"] is False
-    assert go.emergency_stops >= 1
-
-
-def test_face_shortest_turn_is_negative_when_target_behind_right(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    # Facing +90 already, asked to face 0 -> shortest turn is -90 (CW).
-    go = SimulatedGo(yaw=90.0, deg_per_tick=1.0)
-    nav = WaypointNav(go)
-
-    res = nav.face(0, speed=20, timeout_s=8.0)
-
-    assert res["bearing"] == 0.0
-    assert res["from_heading"] == 90.0
-    assert res["target"] == -90.0  # turn_degrees target = yaw_delta(0, 90)
-    assert any(vr < 0 for _vx, _vy, vr in go.moves)
-
-
-# ==========================================================================
-# WaypointNav.go_to
-# ==========================================================================
-def test_go_to_reaches_waypoint_within_tolerance(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    # Already facing +X (heading 0); target is straight ahead in +X.
-    go = SimulatedGo(dist_per_tick=1.0, deg_per_tick=1.0)
-    nav = WaypointNav(go)
-    nav.set_start(0, 0, heading_deg=0.0)
-
-    res = nav.go_to(12, 0, speed=20, arrive_tol_cm=2.0, max_iters=3)
-
-    assert res["arrived"] is True
-    assert res["residual_cm"] <= 2.0
-    assert res["target"] == {"x_cm": 12.0, "y_cm": 0.0}
-    assert len(res["legs"]) >= 1
-    # Each recorded leg carries the navigation breakdown.
-    leg = res["legs"][0]
-    assert set(leg) == {"iter", "bearing", "dist_cm", "turn", "move"}
-    assert go.emergency_stops >= 1
-
-
-def test_go_to_already_at_target_arrives_immediately(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    go = SimulatedGo(dist_per_tick=1.0, deg_per_tick=1.0)
-    nav = WaypointNav(go)
-    nav.set_start(50, 50, heading_deg=0.0)
-
-    res = nav.go_to(50, 50, arrive_tol_cm=2.0, max_iters=3)
-
-    assert res["arrived"] is True
-    assert res["residual_cm"] <= 2.0
-    assert res["legs"] == []  # within tolerance on the first measure -> no legs
-    # No drive commands were issued.
-    assert go.moves == []
-
-
-def test_go_to_aborts_when_path_blocked(monkeypatch):
-    clock = FakeClock()
-    _patch_time(monkeypatch, clock)
-    # Front blocked: the straight-line leg toward +X aborts on clearance.
-    go = SimulatedGo(
-        dist_per_tick=1.0,
-        deg_per_tick=1.0,
-        clearances={"front": 5.0, "back": 100.0, "left": 100.0, "right": 100.0},
-    )
-    nav = WaypointNav(go)
-    nav.set_start(0, 0, heading_deg=0.0)
-
-    res = nav.go_to(30, 0, speed=20, arrive_tol_cm=2.0, max_iters=3)
-
-    assert res["arrived"] is False
-    # The move leg reports the abort with a reason and the loop stopped early.
-    assert len(res["legs"]) == 1
-    assert res["legs"][0]["move"]["aborted"] is True
-    assert "clearance blocked" in res["legs"][0]["move"]["reason"]
-
-
-# ---- set_start guard / raise_on_abort ----------------------------------------
-
-def test_go_to_before_set_start_raises():
-    import pytest
-
-    from dobotkit.go.navigation import WaypointNav
-
-    nav = WaypointNav(SimulatedGo())
-    with pytest.raises(RuntimeError, match="set_start"):
-        nav.go_to(10, 0)
-
 
 def test_goto_distance_raise_on_abort_on_clearance_block():
     import pytest
@@ -407,25 +272,6 @@ def test_turn_degrees_raise_on_abort_on_clearance_block():
         PreciseMover(go).turn_degrees(90, speed=20, threshold=20,
                                       raise_on_abort=True)
 
-
-def test_go_to_raise_on_abort_when_blocked():
-    import pytest
-
-    from dobotkit.go.navigation import NavigationAborted, WaypointNav
-
-    go = SimulatedGo(clearances={"front": 5.0, "back": 100.0,
-                                 "left": 100.0, "right": 100.0})
-    nav = WaypointNav(go)
-    nav.set_start(0, 0, heading_deg=0.0)
-    # Default: quiet arrived=False.
-    res = nav.go_to(30, 0, speed=20, arrive_tol_cm=2.0, max_iters=2)
-    assert res["arrived"] is False
-    # Opt-in: loud NavigationAborted with the full result attached.
-    with pytest.raises(NavigationAborted) as excinfo:
-        nav.go_to(30, 0, speed=20, arrive_tol_cm=2.0, max_iters=2,
-                  raise_on_abort=True)
-    assert excinfo.value.result["arrived"] is False
-    assert excinfo.value.result["aborted"] is True
 
 
 # ---- stall guard / mid-move clearance recheck (hardware incident 2026-07-03) --
