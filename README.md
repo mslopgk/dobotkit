@@ -47,16 +47,14 @@ with dobotkit.MagicianLite(port="auto") as arm:
 
 ## Installation
 
-> **Not yet published to PyPI** — install from a local checkout for now:
-
 ```bash
-pip install -e path/to/dobotkit
+pip install dobotkit
 ```
 
 For development (editable install with the test/lint toolchain):
 
 ```bash
-git clone <repo-url> dobotkit
+git clone https://github.com/mslopgk/dobotkit
 cd dobotkit
 pip install -e ".[dev]"
 ```

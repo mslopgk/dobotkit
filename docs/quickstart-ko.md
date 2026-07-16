@@ -7,10 +7,8 @@
 
 ## 설치
 
-아직 PyPI에 게시되지 않았습니다. 로컬 체크아웃에서 설치하세요:
-
 ```bash
-pip install -e path/to/dobotkit     # 예: pip install -e C:/Users/user/dobot-main/dobotkit
+pip install dobotkit
 ```
 
 ## 연결 3단계

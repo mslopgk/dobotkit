@@ -5,15 +5,37 @@ build-backend = "hatchling.build"
 [project]
 name = "dobotkit"
 dynamic = ["version"]
-description = "Complete pure-Python control library for Dobot Magician Lite (arm) and Magician GO (car)"
+description = "Complete pure-Python control library for Dobot Magician Lite (arm) and Magician GO (car) over DobotLink"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "dobotkit contributors" }]
+keywords = ["dobot", "magician-lite", "magician-go", "magicbox", "robotics", "robot-arm", "dobotlink", "education"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Education",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
 dependencies = ["websockets>=11.0"]
+
+[project.urls]
+Homepage = "https://github.com/mslopgk/dobotkit"
+Repository = "https://github.com/mslopgk/dobotkit"
+Issues = "https://github.com/mslopgk/dobotkit/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-cov", "ruff", "mypy"]
+publish = ["build", "twine"]
 
 [tool.hatch.version]
 path = "src/dobotkit/_version.py"
