@@ -47,7 +47,7 @@ from __future__ import annotations
 import sys
 
 from dobotkit import DobotConnectionError, DobotLinkError, MagicianGO
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 from dobotkit.go.navigation import WaypointNav
 
 # Declared start pose (cm, cm, deg). *** ASSUMPTION -- calibrate to your mat. ***

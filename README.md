@@ -157,7 +157,7 @@ Python  --(WebSocket JSON-RPC)-->  DobotLink  --(COM/wireless)-->  GO
 
 ```python
 from dobotkit import MagicianGO
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 from dobotkit.go.navigation import WaypointNav
 
 # Connect to DobotLink (default ws://localhost:9090) as a context manager.
@@ -308,7 +308,7 @@ from dobotkit import (                              # exceptions
     DobotError, DobotConnectionError, DobotTimeoutError,
     DobotProtocolError, DobotAlarmError, DobotLinkError, DobotValueError,
 )
-from dobotkit.go.client import DobotLinkClient
+from dobotkit.link import DobotLinkClient
 from dobotkit.go.navigation import PreciseMover, WaypointNav
 ```
 
