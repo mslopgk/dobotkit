@@ -107,9 +107,15 @@ with dobotkit.MagicianLite(port="auto") as arm:
     print(f"final pose: x={pose['x']:.1f} y={pose['y']:.1f} z={pose['z']:.1f}")
 ```
 
-`wait=True` polls the on-device queue until the command finishes and raises
-`DobotTimeoutError` if it never does -- treat that as "something is stuck,"
-not a silent success.
+`wait=True` sends `isWaitForFinish=true`, so DobotLink blocks until the move
+physically completes before returning (raising `DobotTimeoutError` only if the
+per-call deadline elapses). Keep targets inside the workspace — a target that
+drives a joint near its travel limit can fault.
+
+> **If the arm accepts commands but does not move**, its controller has an
+> active alarm (motion is silently blocked while sensors/IO/effector still
+> work). This is not reliably clearable from software — **power-cycle the arm**
+> to clear it, then reconnect.
 
 ### MagicBox peripherals (sensors, ADC/DI reads)
 

@@ -45,10 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `queued=wait` meant `wait=False` sent them unqueued, which could desync the
   on-device queue index; `wait` now only controls whether `home()` blocks
   until the queue catches up, matching `move_to`'s always-queued behavior.
-- **`wait=True` no longer returns silently on a timeout.** `move_to` /
-  `move_relative` / `home` / `pick_and_place` now raise `DobotTimeoutError`
-  if the queued command doesn't finish within the deadline, instead of
-  returning the (unfinished) index as if it had succeeded.
+- **Motion blocks on DobotLink's `isWaitForFinish`, not client-side polling.**
+  `move_to` / `move_relative` / `home` / `pick_and_place` with `wait=True` send
+  `isWaitForFinish=true` (with a generous per-call timeout) so DobotLink blocks
+  until the move physically completes — matching DobotLab. This replaced an
+  unreliable queued-command-index poll that returned before the move finished,
+  which let moves overlap and made DobotLink report `action timeout` (verified
+  on hardware). `pick_and_place` now runs its eight steps sequentially this way.
 - **Context-manager teardown (`__exit__`) no longer lets a `disconnect()`
   failure escape.** Both `queue_stop()` and `disconnect()` are now
   independently best-effort during teardown, so neither can mask the `with`
@@ -57,6 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   power/wireless link may be down" even when raised for the arm; the shared
   `DobotLinkClient` now says the device may be unresponsive or DobotLink lost
   the link.
+
+### Known limitations
+
+- **A controller alarm silently blocks arm motion.** If the Magician Lite
+  controller has an active alarm (`GetAlarmsState` non-zero — observed as a
+  recurring `byte12` fault on the test unit), DobotLink accepts motion commands
+  (returns success) but the arm does not move; sensors / IO / effector still
+  work. The alarm is **not reliably clearable in software** (issuing
+  `ClearAllAlarmsState` was observed to *trigger* it on the test unit), so the
+  library does not call it automatically. **Power-cycle the arm to clear it.**
+  Motion is reliable once the controller is alarm-free and targets stay within
+  the workspace (a target that drives a joint near its travel limit can fault).
 
 ## [0.1.0] - 2026-06-30
 
