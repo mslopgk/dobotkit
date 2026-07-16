@@ -28,17 +28,13 @@ from typing import Any, Optional, Tuple
 
 from dobotkit.arm.commands import ArmCommands
 from dobotkit.arm.groups import EffectorGroup, IOGroup, SensorGroup
-from dobotkit.exceptions import DobotConnectionError
+from dobotkit.enums import PTPMode
+from dobotkit.exceptions import DobotConnectionError, DobotTimeoutError
 
 __all__ = ["MagicianLite"]
 
 # A 3-component Cartesian waypoint (x, y, z).
 Point = Tuple[float, float, float]
-
-# PTP mode: straight-line move to an absolute Cartesian pose.
-_MOVL_XYZ = 2
-# PTP mode: straight-line move by a relative Cartesian offset.
-_MOVL_XYZ_INC = 7
 
 
 class MagicianLite:
@@ -116,20 +112,32 @@ class MagicianLite:
             self.cmds.queue_stop()
         except Exception:  # pragma: no cover - teardown must not mask body errors
             pass
-        finally:
+        try:
             self.disconnect()
+        except Exception:  # pragma: no cover - teardown must not mask body errors
+            pass
 
     # -- internal motion -------------------------------------------------------
 
     def _wait_for(
         self, index: Optional[int], wait: bool, timeout_s: float = 30.0
     ) -> Optional[int]:
-        """Poll ``current_index()`` until it reaches ``index`` (or ``timeout_s`` elapses)."""
+        """Poll ``current_index()`` until it reaches ``index``.
+
+        Raises:
+            DobotTimeoutError: if ``timeout_s`` elapses before the queue's
+                current index reaches ``index``.
+        """
         if wait and index is not None:
             deadline = time.monotonic() + timeout_s
-            while time.monotonic() < deadline:
+            while True:
                 if self.cmds.current_index() >= index:
                     break
+                if time.monotonic() >= deadline:
+                    raise DobotTimeoutError(
+                        f"timed out after {timeout_s}s waiting for queued command "
+                        f"index {index} to complete"
+                    )
                 time.sleep(0.05)
         return index
 
@@ -150,14 +158,14 @@ class MagicianLite:
         self, x: float = 200, y: float = 0, z: float = 0, r: float = 0, *, wait: bool = True
     ) -> Optional[int]:
         """Run the homing routine, targeting the given pose."""
-        self.cmds.set_home_params(x, y, z, r, queued=wait)
-        return self._wait_for(self.cmds.set_home_cmd(queued=wait), wait)
+        self.cmds.set_home_params(x, y, z, r, queued=True)
+        return self._wait_for(self.cmds.set_home_cmd(queued=True), wait)
 
     # -- moves -----------------------------------------------------------------
 
     def move_to(
-        self, x: float, y: float, z: float, r: float = 0, *, mode: int = _MOVL_XYZ,
-        wait: bool = False,
+        self, x: float, y: float, z: float, r: float = 0, *,
+        mode: int = PTPMode.MOVL_XYZ, wait: bool = False,
     ) -> Optional[int]:
         """Move to an absolute Cartesian pose (defaults to a straight-line move)."""
         return self._wait_for(self.cmds.set_ptp_cmd(mode, x, y, z, r, queued=True), wait)
@@ -167,7 +175,7 @@ class MagicianLite:
     ) -> Optional[int]:
         """Move by a relative Cartesian offset (straight-line increment)."""
         return self._wait_for(
-            self.cmds.set_ptp_cmd(_MOVL_XYZ_INC, dx, dy, dz, dr, queued=True), wait
+            self.cmds.set_ptp_cmd(PTPMode.MOVL_XYZ_INC, dx, dy, dz, dr, queued=True), wait
         )
 
     # -- effector aliases --------------------------------------------------
@@ -195,7 +203,7 @@ class MagicianLite:
         """
         sx, sy, sz = src
         dx, dy, dz = dst
-        m = _MOVL_XYZ
+        m = PTPMode.MOVL_XYZ
         self.cmds.set_ptp_cmd(m, sx, sy, z_safe, 0)
         self.cmds.set_ptp_cmd(m, sx, sy, sz, 0)
         self.cmds.set_suction_cup(True, True)

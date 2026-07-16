@@ -51,13 +51,12 @@ class EffectorIoMixin(_Base):
             "SetServoAngle", index=int(index), value=float(angle), isQueued=queued))
 
     # -- IO --
-    def set_io_multiplexing(self, address: int, multiplex: int, queued: bool = False) -> Any:
+    def set_io_multiplexing(self, address: int, multiplex: int) -> Any:
         """Set I/O multiplexing mode.
 
         Args:
             address: I/O address.
             multiplex: Multiplex mode.
-            queued: Not used for this command.
 
         Returns:
             Command result.

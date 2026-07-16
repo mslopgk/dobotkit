@@ -83,8 +83,8 @@ def test_suction_cup_default_queued():
     assert p["isQueued"] is True
 
 
-def test_set_io_multiplexing_default_queued():
-    """Test set_io_multiplexing uses queued=False by default."""
+def test_set_io_multiplexing_never_sends_is_queued():
+    """set_io_multiplexing has no `queued` param -- isQueued is never sent."""
     c = FakeClient(results={"Magician.SetIOMultiplexing": True})
     _Cmds(c, "COM8").set_io_multiplexing(24, 4)
     _, p = c.find_call("Magician.SetIOMultiplexing")

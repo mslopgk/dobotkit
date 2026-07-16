@@ -16,7 +16,8 @@ class MotionMixin(_Base):
                     queued: bool = True) -> int:
         """Send PTP (point-to-point) motion command; returns queued command index."""
         return self._queued_index(self._call(
-            "SetPTPCmd", ptpMode=int(mode), x=x, y=y, z=z, r=r, isQueued=queued))
+            "SetPTPCmd", ptpMode=int(mode), x=float(x), y=float(y), z=float(z), r=float(r),
+            isQueued=queued))
 
     def set_home_params(self, x: float, y: float, z: float, r: float,
                         queued: bool = True) -> Any:

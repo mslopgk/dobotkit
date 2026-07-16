@@ -26,6 +26,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
+from dobotkit.enums import GPIOType
 from dobotkit.exceptions import DobotProtocolError, DobotTimeoutError
 
 if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
@@ -87,7 +88,7 @@ class SensorGroup(_Group):
     def adc(self, port: int) -> Optional[int]:
         """Select ADC mode on ``port`` and read its analog value."""
         def _read() -> int:
-            self.cmds.set_io_multiplexing(port, 4)  # 4 = ADC (GPIOTypeADC)
+            self.cmds.set_io_multiplexing(port, int(GPIOType.ADC))
             return int(self.cmds.get_io_adc(port)["value"])
 
         return _guard(_read)
