@@ -242,7 +242,7 @@ def test_get_pose_delegates():
 # Groups
 # --------------------------------------------------------------------------- #
 def test_group_properties_wrap_lowlevel():
-    from dobotkit.arm.groups import EffectorGroup, IOGroup, SensorGroup
+    from dobotkit.arm._legacy_groups import EffectorGroup, IOGroup, SensorGroup
 
     m, ll = make_magician_with_fake_ll()
     assert isinstance(m.effector, EffectorGroup)

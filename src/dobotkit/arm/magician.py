@@ -4,7 +4,7 @@
 wraps a :class:`~dobotkit.arm.lowlevel.LowLevelArm` (which in turn speaks the
 serial protocol through a :class:`~dobotkit.arm.transport.SerialTransport`) and
 exposes the everyday operations directly -- connect, home, move, pick-and-place,
-plus the actuator/sensor/IO :mod:`~dobotkit.arm.groups`.
+plus the actuator/sensor/IO :mod:`~dobotkit.arm._legacy_groups`.
 
 Design highlights
 -----------------
@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+from dobotkit.arm._legacy_groups import EffectorGroup, IOGroup, SensorGroup
 from dobotkit.arm.alarms import decode_alarms
-from dobotkit.arm.groups import EffectorGroup, IOGroup, SensorGroup
 from dobotkit.arm.lowlevel import LowLevelArm
 from dobotkit.arm.structures import Pose
 from dobotkit.arm.transport import SerialTransport

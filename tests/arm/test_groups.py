@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, sentinel
 
 import pytest
 
-from dobotkit.arm.groups import EffectorGroup, IOGroup, SensorGroup
+from dobotkit.arm._legacy_groups import EffectorGroup, IOGroup, SensorGroup
 
 
 # --------------------------------------------------------------------------- #
