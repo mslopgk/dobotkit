@@ -1,19 +1,11 @@
-"""Thin dobotlink.Magician.* RPC wrappers for the Magician Lite arm."""
+"""Connection and on-device command-queue RPC wrappers."""
 from __future__ import annotations
 from typing import Any, List, cast
-from dobotkit.link import DobotLinkClient
+from dobotkit.arm.commands._base import _Base
 
 
-class ArmCommands:
-    """1:1 wrappers over the arm's DobotLink RPC surface."""
-
-    def __init__(self, client: DobotLinkClient, port_name: str) -> None:
-        self._client = client
-        self.port_name = port_name
-
-    def _call(self, func: str, **params: Any) -> Any:
-        params["portName"] = self.port_name
-        return self._client.call(f"Magician.{func}", **params)
+class ConnectionMixin(_Base):
+    """Connect/disconnect the arm and control its queued-command queue."""
 
     # -- connection --
     def search(self) -> List[Any]:
@@ -37,4 +29,4 @@ class ArmCommands:
 
     def current_index(self) -> int:
         resp = self._call("GetQueuedCmdCurrentIndex")
-        return int(resp.get("queuedCmdIndex", 0)) if isinstance(resp, dict) else int(resp or 0)
+        return self._queued_index(resp)
