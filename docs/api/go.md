@@ -230,7 +230,6 @@ bat = go.battery()            # 링크 검증
 |---|---|---|
 | `get_alarm_info()` | `GetAlarmInfo` | 활성 알람/경고 목록. 예상 형태 `{"warning": [...]}` — 방어적으로 읽으세요 |
 | `clean_alarm_info()` | `CleanAlarmInfo` | 활성 알람 소거 |
-| `running_state()` | `GetRunningState` | `{"runningState": int}` — 방어적으로 읽으세요 |
 | `stall_protection()` | `GetStallProtection` | `{"isHappened": int}` — 모터 스톨 발생 여부 |
 | `off_ground()` | `GetOffGround` | `{"isHappened": int}` — 바퀴 들림 감지 |
 | `magic_box_mode()` | `GetMagicBoxMode` | `{"mode": int}`. ⚠️ 이름과 달리 **`MagicianGO.*` 네임스페이스**(MagicBox 자체 RPC 아님) |

@@ -38,7 +38,6 @@
 |---|---|---|
 | `get_alarm_info()` | `GetAlarmInfo` | `{"warning": [...]}` |
 | `clean_alarm_info()` | `CleanAlarmInfo` | (알람 해제) |
-| `running_state()` | `GetRunningState` | `{"runningState": int}` |
 | `stall_protection()` | `GetStallProtection` | `{"isHappened": int}` |
 | `off_ground()` | `GetOffGround` | `{"isHappened": int}` |
 

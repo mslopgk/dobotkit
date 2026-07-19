@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-19
+
+### Removed
+
+- **`MagicianGO.running_state()` (`GetRunningState`).** The GO firmware never
+  answers this call — a reproducible ~10 s `DobotTimeoutError` on the test unit
+  — while every neighbouring read (`battery`, `ultrasonic`, `imu_angle`,
+  `odometer`, `off_ground`, `stall_protection`, `magic_box_mode`/`num`,
+  `get_alarm_info`) works. A method that only ever hangs has no place in the
+  clean core, so it was dropped (hardware-verified 2026-07-19). Use
+  `get_alarm_info()` / `stall_protection()` / `off_ground()` for GO status.
+
 ## [Unreleased]
 
 ### Changed (BREAKING)
@@ -44,8 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `backward`/`strafe`/`spin`/`stop`/`drive_for`/`emergency_stop`),
   `clearance_ok`, native sensors (`ultrasonic`/`ultrasonic_raw`/`odometer`/
   `set_odometer`/`battery`/`imu_angle`), `rgb`/`buzzer`, alarms/state
-  (`get_alarm_info`/`clean_alarm_info`/`running_state`/`stall_protection`/
-  `off_ground`), and `magic_box_mode`/`magic_box_num`. **New:** `go.sensors`
+  (`get_alarm_info`/`clean_alarm_info`/`stall_protection`/`off_ground`), and
+  `magic_box_mode`/`magic_box_num`. **New:** `go.sensors`
   (`GoSensorGroup`) and `go.io` (`GoIOGroup`) read the GO's MagicBox on the
   DobotLink `MagicBox.*` namespace over the *same* `MagicianGO` connection —
   ADC/DI/DO/PWM address an **EIO pin (1..26)**, color/infrared/Seeed address a
@@ -104,6 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library does not call it automatically. **Power-cycle the arm to clear it.**
   Motion is reliable once the controller is alarm-free and targets stay within
   the workspace (a target that drives a joint near its travel limit can fault).
+
+- **A GO left powered on for a long time drops its wireless link.**
+  `ConnectDobot` then returns a *false success* (`{firmwareName: "Dobot",
+  firmwareVersion: "", productName: ""}` — the empty version/name is the tell)
+  and every subsequent read times out. `MagicianGO.open`/`connect`'s built-in
+  battery read-back surfaces this immediately. **Power-cycle the car to
+  recover.**
 
 ## [0.1.0] - 2026-06-30
 

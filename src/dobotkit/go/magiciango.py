@@ -484,10 +484,6 @@ class MagicianGO:
         """Clear the active alarms (``CleanAlarmInfo``)."""
         return self._call("CleanAlarmInfo")
 
-    def running_state(self) -> Any:
-        """Read the running state (``GetRunningState``); shape ``{"runningState": int}`` — read defensively."""
-        return self._call("GetRunningState")
-
     def stall_protection(self) -> Any:
         """Read the stall-protection flag (``GetStallProtection``); ``{"isHappened": int}``."""
         return self._call("GetStallProtection")

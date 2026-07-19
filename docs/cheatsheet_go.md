@@ -51,8 +51,7 @@ with MagicianGO.open(port_name="COM5") as go:   # DobotLink 연결+링크검증,
 ## MagicianGO — 진단/알람/MagicBox 상태
 
 `get_alarm_info()` → `{warning:[...]}` · `clean_alarm_info()` ·
-`running_state()` → `{runningState:int}` · `stall_protection()` → `{isHappened:int}` ·
-`off_ground()` → `{isHappened:int}` ·
+`stall_protection()` → `{isHappened:int}` · `off_ground()` → `{isHappened:int}` ·
 `magic_box_mode()` / `magic_box_num()` — ⚠️ 이름과 달리 `MagicianGO.*` 네임스페이스(MagicBox 자체 RPC 아님).
 
 ## MagicBox 주변장치 — `go.sensors` / `go.io` (🆕 신규, 하드웨어 검증 2026-07-16)

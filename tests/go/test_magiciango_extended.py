@@ -37,12 +37,6 @@ def test_clean_alarm_info():
     assert fc.calls[0] == ("MagicianGO.CleanAlarmInfo", {"portName": "COM5"})
 
 
-def test_running_state():
-    go, fc = make_go(results={"MagicianGO.GetRunningState": {"runningState": 1}})
-    assert go.running_state() == {"runningState": 1}
-    assert fc.calls[0] == ("MagicianGO.GetRunningState", {"portName": "COM5"})
-
-
 def test_stall_protection():
     go, fc = make_go(results={"MagicianGO.GetStallProtection": {"isHappened": 0}})
     assert go.stall_protection() == {"isHappened": 0}
