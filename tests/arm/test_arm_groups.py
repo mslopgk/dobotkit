@@ -21,14 +21,15 @@ def test_suck_delegates():
     c = FakeClient(results={"Magician.SetEndEffectorSuctionCup": {"queuedCmdIndex": 1}})
     EffectorGroup(ArmCommands(c, "COM8")).suck(True)
     _, p = c.find_call("Magician.SetEndEffectorSuctionCup")
-    assert p == {"portName": "COM8", "enableCtrl": True, "on": True, "isQueued": True}
+    # `enable` is the hardware-verified DobotLink pump-power key (not the SDK's `enableCtrl`).
+    assert p == {"portName": "COM8", "enable": True, "on": True, "isQueued": True}
 
 
 def test_grip_delegates():
     c = FakeClient(results={"Magician.SetEndEffectorGripper": {"queuedCmdIndex": 2}})
     EffectorGroup(ArmCommands(c, "COM8")).grip(False, enable=False, queued=False)
     _, p = c.find_call("Magician.SetEndEffectorGripper")
-    assert p == {"portName": "COM8", "enableCtrl": False, "on": False, "isQueued": False}
+    assert p == {"portName": "COM8", "enable": False, "on": False, "isQueued": False}
 
 
 def test_servo_delegates():

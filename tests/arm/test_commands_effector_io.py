@@ -13,7 +13,9 @@ def test_suction_cup_maps():
     c = FakeClient(results={"Magician.SetEndEffectorSuctionCup": {"queuedCmdIndex": 1}})
     result = _Cmds(c, "COM8").set_suction_cup(True, True, queued=True)
     _, p = c.find_call("Magician.SetEndEffectorSuctionCup")
-    assert p == {"portName": "COM8", "enableCtrl": True, "on": True, "isQueued": True}
+    # `enable` is the hardware-verified DobotLink key for pump power (NOT the SDK's `enableCtrl`,
+    # which DobotLink silently ignores). Do not "correct" this back — see effector_io.py.
+    assert p == {"portName": "COM8", "enable": True, "on": True, "isQueued": True}
     assert result == 1
 
 
@@ -37,7 +39,7 @@ def test_gripper_maps():
     c = FakeClient(results={"Magician.SetEndEffectorGripper": {"queuedCmdIndex": 2}})
     result = _Cmds(c, "COM8").set_gripper(False, True, queued=True)
     _, p = c.find_call("Magician.SetEndEffectorGripper")
-    assert p == {"portName": "COM8", "enableCtrl": False, "on": True, "isQueued": True}
+    assert p == {"portName": "COM8", "enable": False, "on": True, "isQueued": True}
     assert result == 2
 
 

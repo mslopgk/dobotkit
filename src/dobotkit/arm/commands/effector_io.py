@@ -19,8 +19,12 @@ class EffectorIoMixin(_Base):
         Returns:
             Queued command index.
         """
+        # DobotLink's param for pump power is `enable` (bool), NOT the SDK's `enableCtrl`.
+        # Sending `enableCtrl` is silently ignored (RPC returns True, pump never powers → the
+        # cup never actuates). Verified live on COM8 via GetEndEffectorSuctionCup readback:
+        # enable=True,on=True -> {isEnabled:True,isOn:True}; enableCtrl was a no-op. `on` is correct.
         return self._queued_index(self._call(
-            "SetEndEffectorSuctionCup", enableCtrl=bool(enable_ctrl), on=bool(on), isQueued=queued))
+            "SetEndEffectorSuctionCup", enable=bool(enable_ctrl), on=bool(on), isQueued=queued))
 
     def set_gripper(self, enable_ctrl: bool, on: bool, queued: bool = True) -> int:
         """Set gripper state.
@@ -33,8 +37,10 @@ class EffectorIoMixin(_Base):
         Returns:
             Queued command index.
         """
+        # DobotLink's param for pump power is `enable` (bool), NOT the SDK's `enableCtrl` — see
+        # set_suction_cup. Verified live: enable=True,on=True -> {isEnabled:True,isOn:True} (close).
         return self._queued_index(self._call(
-            "SetEndEffectorGripper", enableCtrl=bool(enable_ctrl), on=bool(on), isQueued=queued))
+            "SetEndEffectorGripper", enable=bool(enable_ctrl), on=bool(on), isQueued=queued))
 
     def set_servo_angle(self, index: int, angle: float, queued: bool = True) -> int:
         """Set servo angle.
