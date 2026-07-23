@@ -95,7 +95,16 @@ class MagicianLite:
         self.cmds.queue_start()
 
     def disconnect(self) -> None:
-        """Disconnect the arm and, if this instance owns it, close the client."""
+        """Turn the pump off, disconnect the arm, and (if owned) close the client.
+
+        The pump is stopped immediately (``queued=False``) so it never keeps
+        running after the arm is released -- ``suck(False)``/``grip(False)`` only
+        open the valve, they do not power the pump down.
+        """
+        try:
+            self.effector.pump_off(queued=False)
+        except Exception:  # pragma: no cover - teardown must not mask the disconnect
+            pass
         try:
             self.cmds.disconnect()
         finally:
@@ -171,6 +180,16 @@ class MagicianLite:
     def grip(self, on: bool) -> Optional[int]:
         """Close the gripper (``on=True``) or open it."""
         return self.effector.grip(bool(on))
+
+    def pump_off(self) -> None:
+        """Stop the air pump so it goes quiet (see :meth:`EffectorGroup.pump_off`).
+
+        ``suck(False)``/``grip(False)`` release the object but leave the pump
+        running; call this to power the pump down. Runs on the motion queue so
+        it sequences after any pending ``suck``/``grip``. (Disconnecting stops
+        the pump automatically.)
+        """
+        self.effector.pump_off()
 
     # -- pick and place --------------------------------------------------------
 

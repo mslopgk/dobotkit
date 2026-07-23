@@ -47,6 +47,35 @@ def test_context_manager_disconnects():
     assert c.find_call("Magician.DisconnectDobot") is not None
 
 
+def test_disconnect_stops_the_pump_immediately():
+    """disconnect() must power the pump down (enable=False), immediately
+    (isQueued=False), so it never keeps running after the arm is released."""
+    c = FakeClient()
+    arm = MagicianLite(port="COM8", auto_connect=False, _client=c)
+    arm.disconnect()
+    _, sc = c.find_call("Magician.SetEndEffectorSuctionCup")
+    assert sc["enable"] is False and sc["on"] is False
+    assert sc["isQueued"] is False
+
+
+def test_context_manager_stops_pump_on_exit():
+    """Leaving a `with` block stops the pump (via disconnect())."""
+    c = FakeClient()
+    with MagicianLite(port="COM8", auto_connect=False, _client=c):
+        pass
+    assert c.find_call("Magician.SetEndEffectorSuctionCup") is not None
+
+
+def test_high_level_pump_off_sequences_on_queue():
+    """In-program arm.pump_off() queues (isQueued=True) so it runs after any
+    pending suck/grip, unlike the immediate teardown stop."""
+    c = FakeClient()
+    arm = MagicianLite(port="COM8", auto_connect=False, _client=c)
+    arm.pump_off()
+    _, sc = c.find_call("Magician.SetEndEffectorSuctionCup")
+    assert sc["isQueued"] is True
+
+
 def test_exit_swallows_disconnect_error_without_masking():
     """__exit__ must not let a disconnect() failure escape and mask teardown."""
     class Boom(FakeClient):

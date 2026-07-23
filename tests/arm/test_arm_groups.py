@@ -32,6 +32,28 @@ def test_grip_delegates():
     assert p == {"portName": "COM8", "enable": False, "on": False, "isQueued": False}
 
 
+def test_pump_off_powers_down_both_effectors():
+    """pump_off() cuts pump power (enable=False) on BOTH suction cup and gripper
+    -- the arm shares one pump, so this stops it regardless of the attached tool."""
+    c = FakeClient()
+    EffectorGroup(ArmCommands(c, "COM8")).pump_off()
+    _, sc = c.find_call("Magician.SetEndEffectorSuctionCup")
+    _, gr = c.find_call("Magician.SetEndEffectorGripper")
+    assert sc == {"portName": "COM8", "enable": False, "on": False, "isQueued": True}
+    assert gr == {"portName": "COM8", "enable": False, "on": False, "isQueued": True}
+
+
+def test_pump_off_immediate_bypasses_queue():
+    """pump_off(queued=False) sends isQueued=False so the pump stops now
+    (used at teardown, where the motion queue is already being stopped)."""
+    c = FakeClient()
+    EffectorGroup(ArmCommands(c, "COM8")).pump_off(queued=False)
+    _, sc = c.find_call("Magician.SetEndEffectorSuctionCup")
+    _, gr = c.find_call("Magician.SetEndEffectorGripper")
+    assert sc["isQueued"] is False
+    assert gr["isQueued"] is False
+
+
 def test_servo_delegates():
     c = FakeClient(results={"Magician.SetServoAngle": {"queuedCmdIndex": 3}})
     EffectorGroup(ArmCommands(c, "COM8")).servo(1, 45.0)

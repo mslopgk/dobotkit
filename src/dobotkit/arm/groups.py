@@ -76,6 +76,22 @@ class EffectorGroup(_Group):
         """Set the angle of servo ``index`` on the end effector."""
         return self.cmds.set_servo_angle(index, angle, queued=queued)
 
+    def pump_off(self, *, queued: bool = True) -> None:
+        """Cut power to the air pump so it stops running (and goes quiet).
+
+        ``suck(False)`` / ``grip(False)`` only flip the valve to *release* — the
+        pump keeps running (``enable`` stays on) so a re-grab is instant. This
+        turns the pump itself OFF (``enable=False``). The arm has a single pump
+        shared by the suction cup and the gripper, so both are powered down
+        regardless of which effector is attached. Called automatically on
+        :meth:`~dobotkit.arm.magicianlite.MagicianLite.disconnect`.
+
+        Pass ``queued=False`` to stop the pump immediately (bypassing the motion
+        queue) — used by teardown, where the queue is already being stopped.
+        """
+        self.cmds.set_suction_cup(False, False, queued=queued)
+        self.cmds.set_gripper(False, False, queued=queued)
+
 
 class SensorGroup(_Group):
     """Ergonomic accessors for the arm's sensors.
