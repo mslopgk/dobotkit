@@ -5,19 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.1] - 2026-07-19
+## [0.2.0] - 2026-07-24
 
-### Removed
+### Added
 
-- **`MagicianGO.running_state()` (`GetRunningState`).** The GO firmware never
-  answers this call — a reproducible ~10 s `DobotTimeoutError` on the test unit
-  — while every neighbouring read (`battery`, `ultrasonic`, `imu_angle`,
-  `odometer`, `off_ground`, `stall_protection`, `magic_box_mode`/`num`,
-  `get_alarm_info`) works. A method that only ever hangs has no place in the
-  clean core, so it was dropped (hardware-verified 2026-07-19). Use
-  `get_alarm_info()` / `stall_protection()` / `off_ground()` for GO status.
-
-## [Unreleased]
+- **`pump_off()` on the arm** — `MagicianLite.pump_off()` (and
+  `effector.pump_off()`). Cuts power to the shared air pump (`enable=False` on
+  both the suction cup and the gripper) so it stops running and goes quiet.
+  `suck(False)` / `grip(False)` only flip the valve to *release* and leave the
+  pump running (so a re-grab is instant); `pump_off()` powers it down. It runs
+  on the motion queue, so it sequences after any pending `suck`/`grip`.
+  `disconnect()` / `with`-block teardown now calls it automatically
+  (immediately, bypassing the queue), so the pump never keeps running after a
+  program ends.
 
 ### Changed (BREAKING)
 
@@ -85,6 +85,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The suction cup and gripper now actually actuate.** The DobotLink parameter
+  for pump power is `enable` (bool), not the Dobot SDK's `enableCtrl` — DobotLink
+  silently ignores the unknown key (the RPC returns success but the pump never
+  powers), so `suck`/`grip` did nothing on hardware. `set_suction_cup` /
+  `set_gripper` now send `enable`, so `arm.suck(True)` / `arm.grip(True)` grip as
+  expected (the `on` state key was already correct). Verified live via the
+  `GetEndEffectorSuctionCup` / `GetEndEffectorGripper` readback
+  (`enable=True, on=True → {isEnabled: True, isOn: True}`). The FakeClient unit
+  tests only asserted the *sent* params, so they could not catch a key that
+  DobotLink does not accept.
 - **`home()` always queues `SetHOMEParams`/`SetHOMECmd`.** Previously
   `queued=wait` meant `wait=False` sent them unqueued, which could desync the
   on-device queue index; `wait` now only controls whether `home()` blocks
@@ -123,6 +133,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and every subsequent read times out. `MagicianGO.open`/`connect`'s built-in
   battery read-back surfaces this immediately. **Power-cycle the car to
   recover.**
+
+## [0.1.1] - 2026-07-19
+
+### Removed
+
+- **`MagicianGO.running_state()` (`GetRunningState`).** The GO firmware never
+  answers this call — a reproducible ~10 s `DobotTimeoutError` on the test unit
+  — while every neighbouring read (`battery`, `ultrasonic`, `imu_angle`,
+  `odometer`, `off_ground`, `stall_protection`, `magic_box_mode`/`num`,
+  `get_alarm_info`) works. A method that only ever hangs has no place in the
+  clean core, so it was dropped (hardware-verified 2026-07-19). Use
+  `get_alarm_info()` / `stall_protection()` / `off_ground()` for GO status.
 
 ## [0.1.0] - 2026-06-30
 
@@ -183,5 +205,6 @@ Windows, macOS, or Linux.
   software with timeouts.
 - **GO closed-loop turn direction (yaw sign) needs on-hardware confirmation.**
 
-[Unreleased]: https://example.com/dobotkit/compare/v0.1.0...HEAD
+[0.2.0]: https://example.com/dobotkit/compare/v0.1.1...v0.2.0
+[0.1.1]: https://example.com/dobotkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://example.com/dobotkit/releases/tag/v0.1.0
